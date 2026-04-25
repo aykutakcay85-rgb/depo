@@ -101,6 +101,7 @@ app.get('/recipes', async (req, res) => {
         const page = parseInt(req.query.page) || 0;
         const limit = parseInt(req.query.limit) || 20;
         const category = req.query.category;
+        const subcategory = req.query.subcategory;
         const query_text = req.query.q;
 
         const db = mongoClient.db("foodi");
@@ -109,6 +110,9 @@ app.get('/recipes', async (req, res) => {
         let query = {};
         if (category) {
             query.c = category;
+        }
+        if (subcategory) {
+            query.s = subcategory;
         }
 
         if (query_text) {
