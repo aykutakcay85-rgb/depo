@@ -26,23 +26,40 @@ const s3Client = new S3Client({
 });
 
 async function getR2Content(partIndex, offset, length) {
-    const key = `recipes/recipes.txt.part${partIndex}`;
-    const range = `bytes=${offset}-${offset + length - 1}`;
+    const keysToTry = [
+        `recipes/recipes.txt.part${partIndex}`,
+        `recipes.txt.part${partIndex}`
+    ];
     
-    try {
-        const command = new GetObjectCommand({
-            Bucket: BUCKET_NAME,
-            Key: key,
-            Range: range,
-        });
-        
-        const response = await s3Client.send(command);
-        const body = await response.Body.transformToString();
-        return JSON.parse(body);
-    } catch (err) {
-        console.error(`Error fetching from R2 (${key}):`, err.message);
-        return null;
+    for (const key of keysToTry) {
+        try {
+            const range = `bytes=${offset}-${offset + length - 1}`;
+            const command = new GetObjectCommand({
+                Bucket: BUCKET_NAME,
+                Key: key,
+                Range: range,
+            });
+            
+            const response = await s3Client.send(command);
+            const body = await response.Body.transformToString();
+            
+            // Trim and clean potential encoding issues
+            const cleanBody = body.trim();
+            if (!cleanBody.startsWith('{')) {
+                console.error(`⚠️ R2 Data at ${key} is not valid JSON: ${cleanBody.substring(0, 50)}...`);
+                continue;
+            }
+            
+            return JSON.parse(cleanBody);
+        } catch (err) {
+            if (err.name === 'NoSuchKey') {
+                console.log(`ℹ️ Path not found in R2: ${key}, trying next...`);
+                continue;
+            }
+            console.error(`❌ Error fetching from R2 (${key}):`, err.message);
+        }
     }
+    return null;
 }
 
 app.get('/recipes/count', async (req, res) => {
