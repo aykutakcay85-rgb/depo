@@ -12,7 +12,7 @@ const MONGO_URI = "mongodb+srv://aykutakcay85_db_user:ngFVD84yXt8dP0Kz@ac-g1gqdv
 const R2_ENDPOINT = "https://c1cd8dfae75fe4b50ae174f260fd5a43.r2.cloudflarestorage.com";
 const R2_ACCESS_KEY = "a834c46f9493451741157b87ab21426d";
 const R2_SECRET_KEY = "9b734ce673ce4471fe7be01c0cae8f2a1d7c772e09295d1ed228c4fa1a05e7bf";
-const BUCKET_NAME = "chefaykut";
+const BUCKET_NAME = "foodi";
 
 // CLIENTS
 const mongoClient = new MongoClient(MONGO_URI);
@@ -146,6 +146,11 @@ app.get('/recipes', async (req, res) => {
     } catch (err) {
         // Fallback for search if text index is missing
         if (req.query.q) {
+             const db = mongoClient.db("foodi");
+             const collection = db.collection("chefaykut");
+             const page = parseInt(req.query.page) || 0;
+             const limit = parseInt(req.query.limit) || 20;
+             
              const recipes = await collection.find({ t: { $regex: req.query.q, $options: 'i' } })
                 .skip(page * limit)
                 .limit(limit)
