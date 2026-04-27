@@ -25,6 +25,30 @@ const s3Client = new S3Client({
     },
 });
 
+function getCategoryQuery(category) {
+    if (!category) return {};
+    const catLower = category.toLowerCase();
+    // Özel durumlar ve eşlemeler
+    if (catLower.includes('chef')) {
+        return { $regex: 'Chef', $options: 'i' };
+    } else if (catLower === 'main') {
+        return { $regex: 'Main Dishes', $options: 'i' };
+    } else if (catLower === 'appetizer') {
+        return { $regex: 'Appetizer', $options: 'i' };
+    } else if (catLower === 'breakfast') {
+        return { $regex: 'Breakfast', $options: 'i' };
+    } else if (catLower === 'sauce') {
+        return { $regex: 'Sauce|Sos', $options: 'i' };
+    } else if (catLower === 'beverage') {
+        return { $regex: 'Beverage|İçecek', $options: 'i' };
+    } else if (catLower === 'preserve') {
+        return { $regex: 'Preserve|Reçel|Konserve|Kış Hazırlıkları', $options: 'i' };
+    } else {
+        const safeCategory = category.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        return { $regex: '^' + safeCategory + '$', $options: 'i' };
+    }
+}
+
 async function getRecipeFromChunk(chunkId, recipeId) {
     try {
         const key = `chunk_${chunkId}.json`;
@@ -92,7 +116,7 @@ app.get('/recipes/categories/:category/subs', async (req, res) => {
         const category = req.params.category;
 
         const pipeline = [
-            { $match: { c: { $regex: '^' + category + '$', $options: 'i' } } },
+            { $match: { c: getCategoryQuery(category) } },
             { $group: { _id: "$s" } },
             { $match: { _id: { $ne: null } } },
             { $sort: { _id: 1 } },
@@ -120,22 +144,7 @@ app.get('/recipes', async (req, res) => {
 
         let query = {};
         if (category) {
-            const catLower = category.toLowerCase();
-            // Özel durumlar ve eşlemeler
-            if (catLower.includes('chef')) {
-                query.c = { $regex: 'Chef', $options: 'i' };
-            } else if (catLower === 'main') {
-                query.c = { $regex: 'Main Dishes', $options: 'i' };
-            } else if (catLower === 'appetizer') {
-                query.c = { $regex: 'Appetizer', $options: 'i' };
-            } else if (catLower === 'breakfast') {
-                query.c = { $regex: 'Breakfast', $options: 'i' };
-            } else if (catLower === 'sauce') {
-                query.c = { $regex: 'Sauce', $options: 'i' };
-            } else {
-                const safeCategory = category.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                query.c = { $regex: '^' + safeCategory + '$', $options: 'i' };
-            }
+            query.c = getCategoryQuery(category);
         }
         if (subcategory) {
             query.s = { $regex: '^' + subcategory + '$', $options: 'i' };
