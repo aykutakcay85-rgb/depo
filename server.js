@@ -1,6 +1,7 @@
 const express = require('express');
 const { MongoClient, ObjectId } = require('mongodb');
 const { S3Client, GetObjectCommand } = require('@aws-sdk/client-s3');
+const { NodeHttpHandler } = require("@smithy/node-http-handler");
 const cors = require('cors');
 
 const app = express();
@@ -23,6 +24,11 @@ const s3Client = new S3Client({
         accessKeyId: R2_ACCESS_KEY,
         secretAccessKey: R2_SECRET_KEY,
     },
+    requestHandler: new NodeHttpHandler({
+        connectionTimeout: 10000,
+        socketTimeout: 10000,
+        maxSockets: 500, // Devasa artış
+    }),
 });
 
 function getCategoryQuery(category) {
@@ -185,6 +191,9 @@ app.get('/recipes', async (req, res) => {
             .skip(page * limit)
             .limit(limit)
             .toArray();
+            
+        console.log(`📦 Found ${recipes.length} recipes in Mongo`);
+
 
         // Hydrate recipes with details from R2
         const hydratedRecipes = await Promise.all(recipes.map(async (r) => {
