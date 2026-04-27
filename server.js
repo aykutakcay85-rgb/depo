@@ -186,13 +186,36 @@ app.get('/recipes', async (req, res) => {
             .limit(limit)
             .toArray();
 
-        // Map back to expected format if needed, or keep it short
-        res.json(recipes.map(r => ({
-            id: r.i,
-            title: r.t,
-            category: r.c,
-            subcategory: r.s,
-            chunk: r.h,
+        // Hydrate recipes with details from R2
+        const hydratedRecipes = await Promise.all(recipes.map(async (r) => {
+            try {
+                if (r.h) {
+                    const detail = await getRecipeFromChunk(r.h, r.i || r.id);
+                    return { ...r, ...detail };
+                }
+            } catch (e) {
+                console.log(`⚠️ Hydration failed for recipe ${r.i || r.id}: ${e.message}`);
+            }
+            return r;
+        }));
+
+        res.json(hydratedRecipes.map(r => ({
+            id: r.i || r.id || r._id.toString(),
+            uid: r.i || r.id || r._id.toString(),
+            title: r.t || r.title,
+            t: r.t || r.title,
+            category: r.c || r.category,
+            c: r.c || r.category,
+            subcategory: r.s || r.subcategory,
+            s: r.s || r.subcategory,
+            chunk: r.h || r.chunk,
+            h: r.h || r.chunk,
+            ingredients: r.ingredients || r.m || [],
+            m: r.ingredients || r.m || [],
+            steps: r.steps || r.y || [],
+            y: r.steps || r.y || [],
+            image: r.img || r.image,
+            rating: r.r || r.rating || 0,
             _id: r._id
         })));
     } catch (err) {
