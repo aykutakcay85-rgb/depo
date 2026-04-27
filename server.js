@@ -8,7 +8,7 @@ app.use(cors());
 app.use(express.json());
 
 // CONFIGURATION
-const MONGO_URI = "mongodb+srv://aykutakcay85_db_user:ngFVD84yXt8dP0Kz@ac-g1gqdvq.6dwfgcz.mongodb.net/foodi?retryWrites=true&w=majority";
+const MONGO_URI = "mongodb+srv://chefaykut:669085Aykut@cluster0.5smiuj7.mongodb.net/foodi?retryWrites=true&w=majority";
 const R2_ENDPOINT = "https://c1cd8dfae75fe4b50ae174f260fd5a43.r2.cloudflarestorage.com";
 const R2_ACCESS_KEY = "a834c46f9493451741157b87ab21426d";
 const R2_SECRET_KEY = "9b734ce673ce4471fe7be01c0cae8f2a1d7c772e09295d1ed228c4fa1a05e7bf";
@@ -25,41 +25,23 @@ const s3Client = new S3Client({
     },
 });
 
-async function getR2Content(partIndex, offset, length) {
-    const keysToTry = [
-        `recipes/recipes.txt.part${partIndex}`,
-        `recipes.txt.part${partIndex}`
-    ];
-    
-    for (const key of keysToTry) {
-        try {
-            const range = `bytes=${offset}-${offset + length - 1}`;
-            const command = new GetObjectCommand({
-                Bucket: BUCKET_NAME,
-                Key: key,
-                Range: range,
-            });
-            
-            const response = await s3Client.send(command);
-            const body = await response.Body.transformToString();
-            
-            // Trim and clean potential encoding issues
-            const cleanBody = body.trim();
-            if (!cleanBody.startsWith('{')) {
-                console.error(`⚠️ R2 Data at ${key} is not valid JSON: ${cleanBody.substring(0, 50)}...`);
-                continue;
-            }
-            
-            return JSON.parse(cleanBody);
-        } catch (err) {
-            if (err.name === 'NoSuchKey') {
-                console.log(`ℹ️ Path not found in R2: ${key}, trying next...`);
-                continue;
-            }
-            console.error(`❌ Error fetching from R2 (${key}):`, err.message);
-        }
+async function getRecipeFromChunk(chunkId, recipeId) {
+    try {
+        const key = `chunk_${chunkId}.json`;
+        const command = new GetObjectCommand({
+            Bucket: BUCKET_NAME,
+            Key: key,
+        });
+        
+        const response = await s3Client.send(command);
+        const body = await response.Body.transformToString();
+        const chunkData = JSON.parse(body);
+        
+        return chunkData.find(r => r.id === recipeId);
+    } catch (err) {
+        console.error(`❌ Error fetching chunk ${chunkId} from R2:`, err.message);
+        return null;
     }
-    return null;
 }
 
 app.get('/recipes/count', async (req, res) => {
@@ -179,9 +161,9 @@ app.get('/recipes/:id', async (req, res) => {
             return res.status(404).json({ error: "Recipe not found" });
         }
 
-        // If it has part info, fetch from R2
-        if (recipe.p !== undefined && recipe.o !== undefined && recipe.l !== undefined) {
-            const details = await getR2Content(recipe.p, recipe.o, recipe.l);
+        // If it has chunk info, fetch from R2
+        if (recipe.chunk !== undefined) {
+            const details = await getRecipeFromChunk(recipe.chunk, recipe.id || recipe._id.toString());
             if (details) {
                 return res.json({ ...recipe, ...details });
             }
