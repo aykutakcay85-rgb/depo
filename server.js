@@ -195,20 +195,8 @@ app.get('/recipes', async (req, res) => {
         console.log(`📦 Found ${recipes.length} recipes in Mongo`);
 
 
-        // Hydrate recipes with details from R2
-        const hydratedRecipes = await Promise.all(recipes.map(async (r) => {
-            try {
-                if (r.h) {
-                    const detail = await getRecipeFromChunk(r.h, r.i || r.id);
-                    return { ...r, ...detail };
-                }
-            } catch (e) {
-                console.log(`⚠️ Hydration failed for recipe ${r.i || r.id}: ${e.message}`);
-            }
-            return r;
-        }));
-
-        res.json(hydratedRecipes.map(r => ({
+        // Hydration removed for list view to prevent timeout
+        res.json(recipes.map(r => ({
             id: r.i || r.id || r._id.toString(),
             uid: r.i || r.id || r._id.toString(),
             title: r.t || r.title,
@@ -219,10 +207,6 @@ app.get('/recipes', async (req, res) => {
             s: r.s || r.subcategory,
             chunk: r.h || r.chunk,
             h: r.h || r.chunk,
-            ingredients: r.ingredients || r.m || [],
-            m: r.ingredients || r.m || [],
-            steps: r.steps || r.y || [],
-            y: r.steps || r.y || [],
             image: r.img || r.image,
             rating: r.r || r.rating || 0,
             _id: r._id
