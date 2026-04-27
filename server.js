@@ -32,7 +32,7 @@ function getCategoryQuery(category) {
     if (catLower.includes('chef')) {
         return { $regex: 'Chef', $options: 'i' };
     } else if (catLower === 'main') {
-        return { $regex: 'Main Dishes', $options: 'i' };
+        return { $regex: 'Main Dishes|Et Yemekleri|Tavuk Yemekleri|Balık Yemekleri|Kebap|Köfte|Sebze Yemekleri|Dolma-Sarma|Bakliyat|Pilav|Makarna', $options: 'i' };
     } else if (catLower === 'appetizer') {
         return { $regex: 'Appetizer', $options: 'i' };
     } else if (catLower === 'breakfast') {
@@ -115,17 +115,36 @@ app.get('/recipes/categories/:category/subs', async (req, res) => {
         const collection = db.collection("chefaykut");
         const category = req.params.category;
 
-        const pipeline = [
-            { $match: { c: getCategoryQuery(category) } },
-            { $group: { _id: "$s" } },
-            { $match: { _id: { $ne: null } } },
-            { $sort: { _id: 1 } },
-            { $limit: 50 }
-        ];
-
-        const docs = await collection.aggregate(pipeline).toArray();
-        const subs = docs.map(d => d._id).filter(s => s);
-        res.json(subs);
+        let pipeline;
+        if (category.toLowerCase() === 'main') {
+            // Ana yemekler için özel durum: Gerçek alt kategoriler + İlgili ana kategoriler
+            pipeline = [
+                { $match: { c: getCategoryQuery(category) } },
+                { $facet: {
+                    subs: [ { $group: { _id: "$s" } } ],
+                    cats: [ { $group: { _id: "$c" } } ]
+                }},
+                { $project: {
+                    all: { $setUnion: ["$subs._id", "$cats._id"] }
+                }}
+            ];
+            const [result] = await collection.aggregate(pipeline).toArray();
+            let all = result.all.filter(s => s && s !== 'null');
+            // 'Main Dishes' kendisini listeden çıkaralım ki sonsuz döngü olmasın
+            all = all.filter(s => !s.toLowerCase().includes('main dish'));
+            res.json(all.sort());
+        } else {
+            pipeline = [
+                { $match: { c: getCategoryQuery(category) } },
+                { $group: { _id: "$s" } },
+                { $match: { _id: { $ne: null } } },
+                { $sort: { _id: 1 } },
+                { $limit: 50 }
+            ];
+            const docs = await collection.aggregate(pipeline).toArray();
+            const subs = docs.map(d => d._id).filter(s => s);
+            res.json(subs);
+        }
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -148,7 +167,10 @@ app.get('/recipes', async (req, res) => {
         }
         if (subcategory) {
             const safeSub = subcategory.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            query.s = { $regex: safeSub, $options: 'i' };
+            query.$or = [
+                { s: { $regex: safeSub, $options: 'i' } },
+                { c: { $regex: '^' + safeSub + '$', $options: 'i' } }
+            ];
         }
         
         console.log(`🔍 Query: cat=${category}, sub=${subcategory}, text=${query_text} -> Mongo Query:`, JSON.stringify(query));
