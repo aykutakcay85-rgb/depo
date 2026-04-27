@@ -138,7 +138,7 @@ app.get('/recipes', async (req, res) => {
     }
 });
 
-app.get('/recipes/:id', async (req, res) => {
+app.get('/recipes/:id(*)', async (req, res) => {
     try {
         const db = mongoClient.db("foodi");
         const collection = db.collection("chefaykut");
