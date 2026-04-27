@@ -120,9 +120,18 @@ app.get('/recipes', async (req, res) => {
 
         let query = {};
         if (category) {
-            // "chef" için özel durum: Chef Özel'i de kapsasın
-            if (category.toLowerCase() === 'chef') {
+            const catLower = category.toLowerCase();
+            // Özel durumlar ve eşlemeler
+            if (catLower.includes('chef')) {
                 query.c = { $regex: 'Chef', $options: 'i' };
+            } else if (catLower === 'main') {
+                query.c = { $regex: 'Main Dishes', $options: 'i' };
+            } else if (catLower === 'appetizer') {
+                query.c = { $regex: 'Appetizer', $options: 'i' };
+            } else if (catLower === 'breakfast') {
+                query.c = { $regex: 'Breakfast', $options: 'i' };
+            } else if (catLower === 'sauce') {
+                query.c = { $regex: 'Sauce', $options: 'i' };
             } else {
                 const safeCategory = category.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
                 query.c = { $regex: '^' + safeCategory + '$', $options: 'i' };
