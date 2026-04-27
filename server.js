@@ -147,8 +147,12 @@ app.get('/recipes', async (req, res) => {
             query.c = getCategoryQuery(category);
         }
         if (subcategory) {
-            query.s = { $regex: '^' + subcategory + '$', $options: 'i' };
+            const safeSub = subcategory.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            query.s = { $regex: safeSub, $options: 'i' };
         }
+        
+        console.log(`🔍 Query: cat=${category}, sub=${subcategory}, text=${query_text} -> Mongo Query:`, JSON.stringify(query));
+
 
         if (query_text) {
             // Space-saving prefix search
