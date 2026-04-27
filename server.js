@@ -40,6 +40,9 @@ async function getRecipeFromChunk(chunkId, recipeId) {
         return chunkData.find(r => r.id === recipeId);
     } catch (err) {
         console.error(`❌ Error fetching chunk ${chunkId} from R2:`, err.message);
+        if (err.name === 'SyntaxError') {
+            console.error(`❌ JSON Parse Error in chunk ${chunkId}. File might be corrupt.`);
+        }
         return null;
     }
 }
@@ -142,16 +145,24 @@ app.get('/recipes/:id(*)', async (req, res) => {
     try {
         const db = mongoClient.db("foodi");
         const collection = db.collection("chefaykut");
+        const targetId = req.params.id;
         
-        const recipe = await collection.findOne({ i: req.params.id });
+        console.log(`🔍 API Request for ID: ${targetId}`);
+        const recipe = await collection.findOne({ i: targetId });
 
         if (!recipe) {
-            return res.status(404).json({ error: "Recipe not found" });
+            console.log(`❌ Recipe not found in MongoDB: ${targetId}`);
+            return res.status(404).json({ error: "Recipe not found in database", id: targetId });
         }
 
+        console.log(`✅ Found in Mongo. Chunk: ${recipe.h}, Title: ${recipe.t}`);
+
         if (recipe.h !== undefined) {
+            console.log(`📡 Fetching from R2: chunk_${recipe.h}.json...`);
             const details = await getRecipeFromChunk(recipe.h, recipe.i);
+            
             if (details) {
+                console.log(`✨ Successfully hydrated from R2!`);
                 return res.json({ 
                     id: recipe.i,
                     title: recipe.t,
@@ -160,9 +171,17 @@ app.get('/recipes/:id(*)', async (req, res) => {
                     chunk: recipe.h,
                     ...details 
                 });
+            } else {
+                console.log(`⚠️ Detail NOT found in chunk file for ID: ${recipe.i}`);
+                return res.status(404).json({ 
+                    error: "Detail not found in chunk file", 
+                    chunk: recipe.h,
+                    id: recipe.i 
+                });
             }
         }
 
+        console.log(`ℹ️ No chunk info, returning metadata only.`);
         res.json({
             id: recipe.i,
             title: recipe.t,
@@ -171,6 +190,7 @@ app.get('/recipes/:id(*)', async (req, res) => {
             chunk: recipe.h
         });
     } catch (err) {
+        console.error(`🔥 Server Error:`, err);
         res.status(500).json({ error: err.message });
     }
 });
