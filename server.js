@@ -115,8 +115,8 @@ app.get('/recipes', async (req, res) => {
         }
 
         if (query_text) {
-            // Simple text search or Atlas Search if available
-            query.$text = { $search: query_text };
+            // Space-saving prefix search
+            query.t = { $regex: '^' + query_text, $options: 'i' };
         }
 
         const recipes = await collection.find(query)
@@ -124,21 +124,16 @@ app.get('/recipes', async (req, res) => {
             .limit(limit)
             .toArray();
 
-        res.json(recipes);
+        // Map back to expected format if needed, or keep it short
+        res.json(recipes.map(r => ({
+            id: r.i,
+            title: r.t,
+            category: r.c,
+            subcategory: r.s,
+            chunk: r.h,
+            _id: r._id
+        })));
     } catch (err) {
-        // Fallback for search if text index is missing
-        if (req.query.q) {
-             const db = mongoClient.db("foodi");
-             const collection = db.collection("chefaykut");
-             const page = parseInt(req.query.page) || 0;
-             const limit = parseInt(req.query.limit) || 20;
-             
-             const recipes = await collection.find({ t: { $regex: req.query.q, $options: 'i' } })
-                .skip(page * limit)
-                .limit(limit)
-                .toArray();
-             return res.json(recipes);
-        }
         res.status(500).json({ error: err.message });
     }
 });
@@ -148,28 +143,33 @@ app.get('/recipes/:id', async (req, res) => {
         const db = mongoClient.db("foodi");
         const collection = db.collection("chefaykut");
         
-        let query;
-        try {
-            query = { _id: new ObjectId(req.params.id) };
-        } catch (e) {
-            query = { _id: req.params.id };
-        }
-
-        const recipe = await collection.findOne(query);
+        const recipe = await collection.findOne({ i: req.params.id });
 
         if (!recipe) {
             return res.status(404).json({ error: "Recipe not found" });
         }
 
-        // If it has chunk info, fetch from R2
-        if (recipe.chunk !== undefined) {
-            const details = await getRecipeFromChunk(recipe.chunk, recipe.id || recipe._id.toString());
+        if (recipe.h !== undefined) {
+            const details = await getRecipeFromChunk(recipe.h, recipe.i);
             if (details) {
-                return res.json({ ...recipe, ...details });
+                return res.json({ 
+                    id: recipe.i,
+                    title: recipe.t,
+                    category: recipe.c,
+                    subcategory: recipe.s,
+                    chunk: recipe.h,
+                    ...details 
+                });
             }
         }
 
-        res.json(recipe);
+        res.json({
+            id: recipe.i,
+            title: recipe.t,
+            category: recipe.c,
+            subcategory: recipe.s,
+            chunk: recipe.h
+        });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
