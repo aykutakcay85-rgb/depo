@@ -51,8 +51,16 @@ app.get('/recipes/count', async (req, res) => {
     try {
         const db = mongoClient.db("foodi");
         const collection = db.collection("chefaykut");
-        // Anlık sonuç için estimatedDocumentCount kullanıyoruz
-        const count = await collection.estimatedDocumentCount();
+        const category = req.query.category;
+        
+        let count;
+        if (category) {
+            // Belirli bir kategori isteniyorsa
+            count = await collection.countDocuments({ c: { $regex: '^' + category + '$', $options: 'i' } });
+        } else {
+            // Toplam sayı isteniyorsa (Hızlı)
+            count = await collection.estimatedDocumentCount();
+        }
         res.json({ count });
     } catch (err) {
         res.status(500).json({ error: err.message });
