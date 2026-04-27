@@ -51,7 +51,8 @@ app.get('/recipes/count', async (req, res) => {
     try {
         const db = mongoClient.db("foodi");
         const collection = db.collection("chefaykut");
-        const count = await collection.countDocuments();
+        // Anlık sonuç için estimatedDocumentCount kullanıyoruz
+        const count = await collection.estimatedDocumentCount();
         res.json({ count });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -83,7 +84,7 @@ app.get('/recipes/categories/:category/subs', async (req, res) => {
         const category = req.params.category;
 
         const pipeline = [
-            { $match: { c: category } },
+            { $match: { c: { $regex: '^' + category + '$', $options: 'i' } } },
             { $group: { _id: "$s" } },
             { $match: { _id: { $ne: null } } },
             { $sort: { _id: 1 } },
@@ -111,10 +112,11 @@ app.get('/recipes', async (req, res) => {
 
         let query = {};
         if (category) {
-            query.c = category;
+            // Büyük/küçük harf duyarsız arama
+            query.c = { $regex: '^' + category + '$', $options: 'i' };
         }
         if (subcategory) {
-            query.s = subcategory;
+            query.s = { $regex: '^' + subcategory + '$', $options: 'i' };
         }
 
         if (query_text) {
