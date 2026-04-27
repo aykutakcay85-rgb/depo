@@ -120,8 +120,13 @@ app.get('/recipes', async (req, res) => {
 
         let query = {};
         if (category) {
-            // Büyük/küçük harf duyarsız arama
-            query.c = { $regex: '^' + category + '$', $options: 'i' };
+            // "chef" için özel durum: Chef Özel'i de kapsasın
+            if (category.toLowerCase() === 'chef') {
+                query.c = { $regex: 'Chef', $options: 'i' };
+            } else {
+                const safeCategory = category.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                query.c = { $regex: '^' + safeCategory + '$', $options: 'i' };
+            }
         }
         if (subcategory) {
             query.s = { $regex: '^' + subcategory + '$', $options: 'i' };
