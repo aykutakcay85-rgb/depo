@@ -148,7 +148,19 @@ app.get('/recipes/:id(*)', async (req, res) => {
         const targetId = req.params.id;
         
         console.log(`🔍 API Request for ID: ${targetId}`);
-        const recipe = await collection.findOne({ i: targetId });
+        
+        // Try searching by custom ID field 'i' first, then by MongoDB's internal _id
+        let query = { i: targetId };
+        let recipe = await collection.findOne(query);
+
+        if (!recipe && targetId.length === 24) {
+            try {
+                recipe = await collection.findOne({ _id: new ObjectId(targetId) });
+                if (recipe) console.log(`✅ Found by ObjectId: ${targetId}`);
+            } catch (e) {
+                console.log(`⚠️ Invalid ObjectId format: ${targetId}`);
+            }
+        }
 
         if (!recipe) {
             console.log(`❌ Recipe not found in MongoDB: ${targetId}`);
