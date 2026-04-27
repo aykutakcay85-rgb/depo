@@ -157,6 +157,7 @@ app.get('/recipes/categories/:category/subs', async (req, res) => {
 });
 
 app.get('/recipes', async (req, res) => {
+    console.log(`📡 Incoming /recipes request: ${JSON.stringify(req.query)}`);
     try {
         const page = parseInt(req.query.page) || 0;
         const limit = parseInt(req.query.limit) || 20;
