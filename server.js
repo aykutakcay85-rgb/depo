@@ -32,22 +32,25 @@ const s3Client = new S3Client({
 });
 
 function getCategoryQuery(category) {
-    if (!category) return {};
-    const catLower = category.toLowerCase();
+    const cat = category.toLowerCase();
+    if (cat === 'all') return {};
+    if (cat === 'gastro') return { c: 'gastro' };
+    if (cat === 'chef_pro') return { c: 'chef_pro' };
+    
     // Özel durumlar ve eşlemeler
-    if (catLower.includes('chef')) {
+    if (cat.includes('chef')) {
         return { $regex: 'Chef', $options: 'i' };
-    } else if (catLower === 'main') {
+    } else if (cat === 'main') {
         return { $regex: 'Main Dishes|Et Yemekleri|Tavuk Yemekleri|Balık Yemekleri|Kebap|Köfte|Sebze Yemekleri|Dolma-Sarma|Bakliyat|Pilav|Makarna', $options: 'i' };
-    } else if (catLower === 'appetizer') {
+    } else if (cat === 'appetizer') {
         return { $regex: 'Appetizer', $options: 'i' };
-    } else if (catLower === 'breakfast') {
+    } else if (cat === 'breakfast') {
         return { $regex: 'Breakfast', $options: 'i' };
-    } else if (catLower === 'sauce') {
+    } else if (cat === 'sauce') {
         return { $regex: 'Sauce|Sos', $options: 'i' };
-    } else if (catLower === 'beverage') {
+    } else if (cat === 'beverage') {
         return { $regex: 'Beverage|İçecek', $options: 'i' };
-    } else if (catLower === 'preserve') {
+    } else if (cat === 'preserve') {
         return { $regex: 'Preserve|Reçel|Konserve|Kış Hazırlıkları', $options: 'i' };
     } else {
         const safeCategory = category.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -245,7 +248,7 @@ app.get('/recipes/:id(*)', async (req, res) => {
 
         console.log(`✅ Found in Mongo. Chunk: ${recipe.h}, Title: ${recipe.t}`);
 
-        if (recipe.h !== undefined) {
+        if (recipe.h !== undefined && recipe.h !== null) {
             console.log(`📡 Fetching from R2: chunk_${recipe.h}.json...`);
             const details = await getRecipeFromChunk(recipe.h, recipe.i);
             
@@ -267,24 +270,47 @@ app.get('/recipes/:id(*)', async (req, res) => {
                     id: recipe.i 
                 });
             }
+        } else {
+            console.log(`📦 Returning embedded data for: ${recipe.t}`);
+            return res.json({
+                id: recipe.i,
+                title: recipe.t,
+                category: recipe.c,
+                subcategory: recipe.s,
+                chunk: null,
+                ingredients: recipe.ingredients || [],
+                steps: recipe.steps || [],
+                tips: recipe.tips || [],
+                suggestions: recipe.suggestions || [],
+                nutrition: recipe.nutrition || {}
+            });
         }
-
-        console.log(`ℹ️ No chunk info, returning metadata only.`);
-        res.json({
-            id: recipe.i,
-            title: recipe.t,
-            category: recipe.c,
-            subcategory: recipe.s,
-            chunk: recipe.h
-        });
     } catch (err) {
         console.error(`🔥 Server Error:`, err);
         res.status(500).json({ error: err.message });
     }
 });
 
+app.get('/ping', (req, res) => {
+    res.send('pong');
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, async () => {
     await mongoClient.connect();
     console.log(`🚀 Server ready on port ${PORT}`);
+    
+    // Self-ping mechanism to stay awake on Cloud (Render, etc.)
+    const EXTERNAL_URL = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
+    setInterval(() => {
+        const http = require('http');
+        const https = require('https');
+        const client = EXTERNAL_URL.startsWith('https') ? https : http;
+        
+        client.get(`${EXTERNAL_URL}/ping`, (res) => {
+            console.log(`📡 Self-ping successful: ${res.statusCode}`);
+        }).on('error', (err) => {
+            console.error(`❌ Self-ping failed: ${err.message}`);
+        });
+    }, 10 * 60 * 1000); // Every 10 minutes
 });
