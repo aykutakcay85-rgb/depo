@@ -31,6 +31,23 @@ const s3Client = new S3Client({
     }),
 });
 
+// SECURITY: API KEY
+const APP_API_KEY = "chef-aykut-super-secret-2026-xyz"; // Bunu kimse bilmemeli
+
+function authenticate(req, res, next) {
+    const apiKey = req.headers['x-api-key'];
+    if (req.path === '/ping') return next(); // Ping serbest
+    
+    if (apiKey && apiKey === APP_API_KEY) {
+        next();
+    } else {
+        console.warn(`🚨 Unauthorized access attempt from IP: ${req.ip}`);
+        res.status(401).json({ error: "Unauthorized access. Invalid API Key." });
+    }
+}
+
+app.use(authenticate);
+
 function getCategoryQuery(category) {
     const cat = category.toLowerCase();
     if (cat === 'all') return {};
