@@ -216,22 +216,114 @@ app.get('/recipes', async (req, res) => {
         console.log(`📦 Found ${recipes.length} recipes in Mongo`);
 
 
+        // Fallback image map (kategoriye göre)
+        const fallbackImages = {
+            'dessert':   'https://images.unsplash.com/photo-1551024506-0bccd828d307?q=80&w=500',
+            'soup':      'https://images.unsplash.com/photo-1547592166-23ac45744acd?q=80&w=500',
+            'salad':     'https://images.unsplash.com/photo-1512621776951-a57141f2eefd?q=80&w=500',
+            'beef':      'https://images.unsplash.com/photo-1544025162-d76694265947?q=80&w=500',
+            'chicken':   'https://images.unsplash.com/photo-1604908176997-125f25cc6f3d?q=80&w=500',
+            'breakfast': 'https://images.unsplash.com/photo-1482049016688-2d3e1b311543?q=80&w=500',
+            'pasta':     'https://images.unsplash.com/photo-1555949258-eb67b1ef0ceb?q=80&w=500',
+            'default':   'https://images.unsplash.com/photo-1504674900247-0877df9cc836?q=80&w=500'
+        };
+
         // Hydration removed for list view to prevent timeout
-        res.json(recipes.map(r => ({
-            id: r.i || r.id || r._id.toString(),
-            uid: r.i || r.id || r._id.toString(),
-            title: r.t || r.title,
-            t: r.t || r.title,
-            category: r.c || r.category,
-            c: r.c || r.category,
-            subcategory: r.s || r.subcategory,
-            s: r.s || r.subcategory,
-            chunk: r.h || r.chunk,
-            h: r.h || r.chunk,
-            image: r.img || r.image,
-            rating: r.r || r.rating || 0,
-            _id: r._id
-        })));
+        res.json(recipes.map(r => {
+            const cat = (r.c || r.category || '').toLowerCase();
+            let img = r.img || r.image;
+            if (!img || img.length < 5) {
+                // Kategoriye göre fallback
+                const key = Object.keys(fallbackImages).find(k => cat.includes(k)) || 'default';
+                img = fallbackImages[key];
+            }
+            return {
+                id: r.i || r.id || r._id.toString(),
+                uid: r.i || r.id || r._id.toString(),
+                title: r.t || r.title,
+                t: r.t || r.title,
+                category: r.c || r.category,
+                c: r.c || r.category,
+                subcategory: r.s || r.subcategory,
+                s: r.s || r.subcategory,
+                chunk: r.h !== undefined ? r.h : r.chunk,
+                h: r.h !== undefined ? r.h : r.chunk,
+                image: img,
+                img: img,
+                rating: r.r || r.rating || 0,
+                _id: r._id
+            };
+        }));
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/daily', async (req, res) => {
+    try {
+        const db = mongoClient.db("foodi");
+        const collection = db.collection("chefaykut");
+        
+        // Count documents
+        const count = await collection.estimatedDocumentCount();
+        const limit = 20;
+        
+        // Generate daily seed based on UTC Date
+        const today = new Date();
+        const seedStr = `${today.getUTCFullYear()}-${today.getUTCMonth()}-${today.getUTCDate()}`;
+        
+        let hash = 0;
+        for (let i = 0; i < seedStr.length; i++) {
+            hash = ((hash << 5) - hash) + seedStr.charCodeAt(i);
+            hash |= 0; 
+        }
+        hash = Math.abs(hash);
+        
+        // Calculate offset (seeded pseudo-random)
+        const offset = hash % (count > limit ? count - limit : 1);
+        
+        // Tüm tarifleri çek (img filtresi KALDIRILDI - çoğu kayıtta img yok)
+        const recipes = await collection.find({})
+            .skip(offset)
+            .limit(limit)
+            .toArray();
+        
+        // Fallback image map (kategoriye göre)
+        const fallbackImages = {
+            'dessert':   'https://images.unsplash.com/photo-1551024506-0bccd828d307?q=80&w=500',
+            'soup':      'https://images.unsplash.com/photo-1547592166-23ac45744acd?q=80&w=500',
+            'salad':     'https://images.unsplash.com/photo-1512621776951-a57141f2eefd?q=80&w=500',
+            'beef':      'https://images.unsplash.com/photo-1544025162-d76694265947?q=80&w=500',
+            'chicken':   'https://images.unsplash.com/photo-1604908176997-125f25cc6f3d?q=80&w=500',
+            'breakfast': 'https://images.unsplash.com/photo-1482049016688-2d3e1b311543?q=80&w=500',
+            'pasta':     'https://images.unsplash.com/photo-1555949258-eb67b1ef0ceb?q=80&w=500',
+            'default':   'https://images.unsplash.com/photo-1504674900247-0877df9cc836?q=80&w=500'
+        };
+            
+        res.json(recipes.map(r => {
+            const cat = (r.c || r.category || '').toLowerCase();
+            let img = r.img || r.image;
+            if (!img || img.length < 5) {
+                const key = Object.keys(fallbackImages).find(k => cat.includes(k)) || 'default';
+                img = fallbackImages[key];
+            }
+            return {
+                id: r.i || r.id || r._id.toString(),
+                uid: r.i || r.id || r._id.toString(),
+                title: r.t || r.title,
+                t: r.t || r.title,
+                category: r.c || r.category,
+                c: r.c || r.category,
+                subcategory: r.s || r.subcategory,
+                s: r.s || r.subcategory,
+                chunk: r.h !== undefined ? r.h : r.chunk,
+                h: r.h !== undefined ? r.h : r.chunk,
+                image: img,
+                img: img,
+                rating: r.r || r.rating || 0,
+                _id: r._id
+            };
+        }));
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
