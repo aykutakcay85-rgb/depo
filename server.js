@@ -87,7 +87,7 @@ async function getRecipeFromChunk(chunkId, recipeId) {
         const body = await response.Body.transformToString();
         const chunkData = JSON.parse(body);
         
-        return chunkData.find(r => r.id === recipeId);
+        return chunkData.find(r => (r.i === recipeId || r.id === recipeId));
     } catch (err) {
         console.error(`❌ Error fetching chunk ${chunkId} from R2:`, err.message);
         if (err.name === 'SyntaxError') {
@@ -237,20 +237,19 @@ app.get('/recipes', async (req, res) => {
                 const key = Object.keys(fallbackImages).find(k => cat.includes(k)) || 'default';
                 img = fallbackImages[key];
             }
-            return {
-                id: r.i || r.id || r._id.toString(),
-                uid: r.i || r.id || r._id.toString(),
-                title: r.t || r.title,
-                t: r.t || r.title,
-                category: r.c || r.category,
-                c: r.c || r.category,
-                subcategory: r.s || r.subcategory,
-                s: r.s || r.subcategory,
-                chunk: r.h !== undefined ? r.h : r.chunk,
-                h: r.h !== undefined ? r.h : r.chunk,
+                        return {
+                i: r.i || r.id || r.uid || r._id.toString(),
+                t: r.t || r.title || r.name,
+                c: r.c || r.category || r.main_category,
+                s: r.s || r.subcategory || r.sub_category,
+                h: r.h !== undefined ? r.h : (r.chunk !== undefined ? r.chunk : null),
+                r: r.r || r.rating || 0,
+                p: img,
+                // Fallbacks for older client versions
+                id: r.i || r.id || r.uid || r._id.toString(),
+                title: r.t || r.title || r.name,
+                category: r.c || r.category || r.main_category,
                 image: img,
-                img: img,
-                rating: r.r || r.rating || 0,
                 _id: r._id
             };
         }));
@@ -307,20 +306,19 @@ app.get('/daily', async (req, res) => {
                 const key = Object.keys(fallbackImages).find(k => cat.includes(k)) || 'default';
                 img = fallbackImages[key];
             }
-            return {
-                id: r.i || r.id || r._id.toString(),
-                uid: r.i || r.id || r._id.toString(),
-                title: r.t || r.title,
-                t: r.t || r.title,
-                category: r.c || r.category,
-                c: r.c || r.category,
-                subcategory: r.s || r.subcategory,
-                s: r.s || r.subcategory,
-                chunk: r.h !== undefined ? r.h : r.chunk,
-                h: r.h !== undefined ? r.h : r.chunk,
+                        return {
+                i: r.i || r.id || r.uid || r._id.toString(),
+                t: r.t || r.title || r.name,
+                c: r.c || r.category || r.main_category,
+                s: r.s || r.subcategory || r.sub_category,
+                h: r.h !== undefined ? r.h : (r.chunk !== undefined ? r.chunk : null),
+                r: r.r || r.rating || 0,
+                p: img,
+                // Fallbacks for older client versions
+                id: r.i || r.id || r.uid || r._id.toString(),
+                title: r.t || r.title || r.name,
+                category: r.c || r.category || r.main_category,
                 image: img,
-                img: img,
-                rating: r.r || r.rating || 0,
                 _id: r._id
             };
         }));
@@ -364,11 +362,16 @@ app.get('/recipes/:id(*)', async (req, res) => {
             if (details) {
                 console.log(`✨ Successfully hydrated from R2!`);
                 return res.json({ 
-                    id: recipe.i,
-                    title: recipe.t,
-                    category: recipe.c,
-                    subcategory: recipe.s,
+                    id: recipe.i || recipe.id || recipe.uid,
+                    i: recipe.i || recipe.id || recipe.uid,
+                    title: recipe.t || recipe.title || recipe.name,
+                    t: recipe.t || recipe.title || recipe.name,
+                    category: recipe.c || recipe.category,
+                    c: recipe.c || recipe.category,
+                    subcategory: recipe.s || recipe.subcategory,
+                    s: recipe.s || recipe.subcategory,
                     chunk: recipe.h,
+                    h: recipe.h,
                     ...details 
                 });
             } else {
