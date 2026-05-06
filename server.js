@@ -220,10 +220,9 @@ app.get('/recipes', async (req, res) => {
         let page = parseInt(req.query.page) || 0;
         let limit = parseInt(req.query.limit) || 20;
         
-        // Input Validation
         if (page < 0) page = 0;
         if (limit <= 0) limit = 20;
-        if (limit > 100) limit = 100; // Hard cap for performance
+        if (limit > 100) limit = 100;
 
         const category = req.query.category;
         const subcategory = req.query.subcategory;
@@ -232,76 +231,121 @@ app.get('/recipes', async (req, res) => {
         const db = mongoClient.db("foodi");
         const collection = db.collection("chefaykut");
 
-        let query = {};
-        if (category) {
-            query.c = getCategoryQuery(category);
+        // Advanced Search with Atlas Search (If query_text provided)
+        if (query_text && query_text.length > 1) {
+            try {
+                const searchPipeline = [
+                    {
+                        $search: {
+                            index: "default",
+                            compound: {
+                                must: [{
+                                    text: {
+                                        query: query_text,
+                                        path: ["t", "name", "title"],
+                                        fuzzy: { maxEdits: 1 }
+                                    }
+                                }],
+                                should: [
+                                    {
+                                        near: {
+                                            path: "r",
+                                            origin: 5,
+                                            pivot: 2,
+                                            score: { boost: 2 }
+                                        }
+                                    },
+                                    {
+                                        exists: {
+                                            path: "img",
+                                            score: { boost: 1.5 }
+                                        }
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                    { $skip: page * limit },
+                    { $limit: limit }
+                ];
+                
+                if (category) {
+                    searchPipeline[0].$search.compound.filter = [{
+                        text: {
+                            query: category,
+                            path: "c"
+                        }
+                    }];
+                }
+
+                const searchResults = await collection.aggregate(searchPipeline).toArray();
+                return res.json(searchResults.map(r => _formatRecipe(r)));
+            } catch (searchErr) {
+                console.warn("⚠️ Atlas Search failed or not configured, falling back to Regex:", searchErr.message);
+                // Fallback to regex logic below...
+            }
         }
+
+        // Standard Query Logic
+        let query = {};
+        if (category) query.c = getCategoryQuery(category);
         if (subcategory) {
             const safeSub = subcategory.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            query.$or = [
-                { s: { $regex: safeSub, $options: 'i' } },
-                { c: { $regex: '^' + safeSub + '$', $options: 'i' } }
-            ];
+            query.$or = [{ s: { $regex: safeSub, $options: 'i' } }, { c: { $regex: '^' + safeSub + '$', $options: 'i' } }];
         }
-        
-        console.log(`🔍 Query: cat=${category}, sub=${subcategory}, text=${query_text} -> Mongo Query:`, JSON.stringify(query));
+        if (query_text) query.t = { $regex: '^' + query_text, $options: 'i' };
 
-
-        if (query_text) {
-            // Space-saving prefix search
-            query.t = { $regex: '^' + query_text, $options: 'i' };
-        }
-
+        // Sort by rating for better first impression
         const recipes = await collection.find(query)
+            .sort({ r: -1 }) 
             .skip(page * limit)
             .limit(limit)
             .toArray();
             
-        console.log(`📦 Found ${recipes.length} recipes in Mongo`);
-
-
-        // Fallback image map (kategoriye göre)
-        const fallbackImages = {
-            'dessert':   'https://images.unsplash.com/photo-1551024506-0bccd828d307?q=80&w=500',
-            'soup':      'https://images.unsplash.com/photo-1547592166-23ac45744acd?q=80&w=500',
-            'salad':     'https://images.unsplash.com/photo-1512621776951-a57141f2eefd?q=80&w=500',
-            'beef':      'https://images.unsplash.com/photo-1544025162-d76694265947?q=80&w=500',
-            'chicken':   'https://images.unsplash.com/photo-1604908176997-125f25cc6f3d?q=80&w=500',
-            'breakfast': 'https://images.unsplash.com/photo-1482049016688-2d3e1b311543?q=80&w=500',
-            'pasta':     'https://images.unsplash.com/photo-1555949258-eb67b1ef0ceb?q=80&w=500',
-            'default':   'https://images.unsplash.com/photo-1504674900247-0877df9cc836?q=80&w=500'
-        };
-
-        // Hydration removed for list view to prevent timeout
-        res.json(recipes.map(r => {
-            const cat = (r.c || r.category || '').toLowerCase();
-            let img = r.img || r.image;
-            if (!img || img.length < 5) {
-                // Kategoriye göre fallback
-                const key = Object.keys(fallbackImages).find(k => cat.includes(k)) || 'default';
-                img = fallbackImages[key];
-            }
-                        return {
-                i: r.i || r.id || r.uid || r._id.toString(),
-                t: r.t || r.title || r.name,
-                c: r.c || r.category || r.main_category,
-                s: r.s || r.subcategory || r.sub_category,
-                h: r.h !== undefined ? r.h : (r.chunk !== undefined ? r.chunk : null),
-                r: r.r || r.rating || 0,
-                p: img,
-                // Fallbacks for older client versions
-                id: r.i || r.id || r.uid || r._id.toString(),
-                title: r.t || r.title || r.name,
-                category: r.c || r.category || r.main_category,
-                image: img,
-                _id: r._id
-            };
-        }));
+        res.json(recipes.map(r => _formatRecipe(r)));
     } catch (err) {
         console.error(`❌ Server Error:`, err.message);
         res.status(500).json({ error: "Internal Server Error" });
     }
 });
+
+// Helper to format recipe consistently
+function _formatRecipe(r) {
+    const cat = (r.c || r.category || '').toLowerCase();
+    const fallbackImages = {
+        'dessert':   'https://images.unsplash.com/photo-1551024506-0bccd828d307?q=80&w=500',
+        'soup':      'https://images.unsplash.com/photo-1547592166-23ac45744acd?q=80&w=500',
+        'salad':     'https://images.unsplash.com/photo-1512621776951-a57141f2eefd?q=80&w=500',
+        'beef':      'https://images.unsplash.com/photo-1544025162-d76694265947?q=80&w=500',
+        'chicken':   'https://images.unsplash.com/photo-1604908176997-125f25cc6f3d?q=80&w=500',
+        'breakfast': 'https://images.unsplash.com/photo-1482049016688-2d3e1b311543?q=80&w=500',
+        'pasta':     'https://images.unsplash.com/photo-1555949258-eb67b1ef0ceb?q=80&w=500',
+        'default':   'https://images.unsplash.com/photo-1504674900247-0877df9cc836?q=80&w=500'
+    };
+
+    let img = r.img || r.image || r.p;
+    if (!img || img.length < 5) {
+        const key = Object.keys(fallbackImages).find(k => cat.includes(k)) || 'default';
+        img = fallbackImages[key];
+    }
+
+    const id = r.i || r.id || r.uid || r._id.toString();
+    return {
+        i: id,
+        t: r.t || r.title || r.name,
+        c: r.c || r.category || r.main_category,
+        s: r.s || r.subcategory || r.sub_category,
+        h: r.h !== undefined ? r.h : (r.chunk !== undefined ? r.chunk : null),
+        r: r.r || r.rating || 0,
+        p: img,
+        // Legacy support
+        id: id,
+        title: r.t || r.title || r.name,
+        category: r.c || r.category || r.main_category,
+        image: img
+    };
+}
+
 
 app.get('/daily', async (req, res) => {
     try {
@@ -344,31 +388,9 @@ app.get('/daily', async (req, res) => {
             'default':   'https://images.unsplash.com/photo-1504674900247-0877df9cc836?q=80&w=500'
         };
             
-        res.json(recipes.map(r => {
-            const cat = (r.c || r.category || '').toLowerCase();
-            let img = r.img || r.image;
-            if (!img || img.length < 5) {
-                const key = Object.keys(fallbackImages).find(k => cat.includes(k)) || 'default';
-                img = fallbackImages[key];
-            }
-                        return {
-                i: r.i || r.id || r.uid || r._id.toString(),
-                t: r.t || r.title || r.name,
-                c: r.c || r.category || r.main_category,
-                s: r.s || r.subcategory || r.sub_category,
-                h: r.h !== undefined ? r.h : (r.chunk !== undefined ? r.chunk : null),
-                r: r.r || r.rating || 0,
-                p: img,
-                // Fallbacks for older client versions
-                id: r.i || r.id || r.uid || r._id.toString(),
-                title: r.t || r.title || r.name,
-                category: r.c || r.category || r.main_category,
-                image: img,
-                _id: r._id
-            };
-        }));
+        res.json(recipes.map(r => _formatRecipe(r)));
     } catch (err) {
-        console.error(`❌ Server Error:`, err.message);
+        console.error(`❌ Server Error in /daily:`, err.message);
         res.status(500).json({ error: "Internal Server Error" });
     }
 });
@@ -407,19 +429,8 @@ app.get('/recipes/:id(*)', async (req, res) => {
             
             if (details) {
                 console.log(`✨ Successfully hydrated from R2!`);
-                return res.json({ 
-                    id: recipe.i || recipe.id || recipe.uid,
-                    i: recipe.i || recipe.id || recipe.uid,
-                    title: recipe.t || recipe.title || recipe.name,
-                    t: recipe.t || recipe.title || recipe.name,
-                    category: recipe.c || recipe.category,
-                    c: recipe.c || recipe.category,
-                    subcategory: recipe.s || recipe.subcategory,
-                    s: recipe.s || recipe.subcategory,
-                    chunk: recipe.h,
-                    h: recipe.h,
-                    ...details 
-                });
+                const base = _formatRecipe(recipe);
+                return res.json({ ...base, ...details });
             } else {
                 console.log(`⚠️ Detail NOT found in chunk file for ID: ${recipe.i}`);
                 return res.status(404).json({ 
