@@ -1,19 +1,54 @@
+require('dotenv').config();
 const express = require('express');
 const { MongoClient, ObjectId } = require('mongodb');
 const { S3Client, GetObjectCommand } = require('@aws-sdk/client-s3');
 const { NodeHttpHandler } = require("@smithy/node-http-handler");
 const cors = require('cors');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 
 const app = express();
-app.use(cors());
+
+// SECURITY: Helmet headers
+app.use(helmet());
+
+// SECURITY: Rate Limiting
+const limiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 100, // Limit each IP to 100 requests per windowMs
+    message: { error: "Too many requests from this IP, please try again later." },
+    standardHeaders: true,
+    legacyHeaders: false,
+});
+app.use(limiter);
+
+// SECURITY: CORS Configuration
+const allowedOrigins = process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : ['*'];
+app.use(cors({
+    origin: (origin, callback) => {
+        if (!origin || allowedOrigins.includes('*') || allowedOrigins.includes(origin)) {
+            callback(null, true);
+        } else {
+            callback(new Error('Not allowed by CORS'));
+        }
+    }
+}));
+
 app.use(express.json());
 
-// CONFIGURATION
-const MONGO_URI = "mongodb+srv://chefaykut:669085Aykut@cluster0.5smiuj7.mongodb.net/foodi?retryWrites=true&w=majority";
-const R2_ENDPOINT = "https://c1cd8dfae75fe4b50ae174f260fd5a43.r2.cloudflarestorage.com";
-const R2_ACCESS_KEY = "a834c46f9493451741157b87ab21426d";
-const R2_SECRET_KEY = "9b734ce673ce4471fe7be01c0cae8f2a1d7c772e09295d1ed228c4fa1a05e7bf";
-const BUCKET_NAME = "foodi";
+// CONFIGURATION (Moved to Environment Variables)
+const MONGO_URI = process.env.MONGO_URI;
+const R2_ENDPOINT = process.env.R2_ENDPOINT;
+const R2_ACCESS_KEY = process.env.R2_ACCESS_KEY;
+const R2_SECRET_KEY = process.env.R2_SECRET_KEY;
+const BUCKET_NAME = process.env.BUCKET_NAME || "foodi";
+const APP_API_KEY = process.env.APP_API_KEY;
+
+if (!MONGO_URI || !APP_API_KEY) {
+    console.error("❌ CRITICAL: Missing required environment variables (MONGO_URI or APP_API_KEY)");
+    process.exit(1);
+}
+
 
 // CLIENTS
 const mongoClient = new MongoClient(MONGO_URI);
@@ -32,7 +67,7 @@ const s3Client = new S3Client({
 });
 
 // SECURITY: API KEY
-const APP_API_KEY = "chef-aykut-super-secret-2026-xyz"; // Bunu kimse bilmemeli
+// Moved to process.env.APP_API_KEY
 
 function authenticate(req, res, next) {
     const apiKey = req.headers['x-api-key'];
@@ -113,7 +148,8 @@ app.get('/recipes/count', async (req, res) => {
         }
         res.json({ count });
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        console.error(`❌ Error in /recipes/count:`, err.message);
+        res.status(500).json({ error: "Internal Server Error" });
     }
 });
 
@@ -131,7 +167,8 @@ app.get('/recipes/counts', async (req, res) => {
         });
         res.json(result);
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        console.error(`❌ Error in /recipes/counts:`, err.message);
+        res.status(500).json({ error: "Internal Server Error" });
     }
 });
 
@@ -172,15 +209,22 @@ app.get('/recipes/categories/:category/subs', async (req, res) => {
             res.json(subs);
         }
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        console.error(`❌ Server Error:`, err.message);
+        res.status(500).json({ error: "Internal Server Error" });
     }
 });
 
 app.get('/recipes', async (req, res) => {
     console.log(`📡 Incoming /recipes request: ${JSON.stringify(req.query)}`);
     try {
-        const page = parseInt(req.query.page) || 0;
-        const limit = parseInt(req.query.limit) || 20;
+        let page = parseInt(req.query.page) || 0;
+        let limit = parseInt(req.query.limit) || 20;
+        
+        // Input Validation
+        if (page < 0) page = 0;
+        if (limit <= 0) limit = 20;
+        if (limit > 100) limit = 100; // Hard cap for performance
+
         const category = req.query.category;
         const subcategory = req.query.subcategory;
         const query_text = req.query.q;
@@ -254,7 +298,8 @@ app.get('/recipes', async (req, res) => {
             };
         }));
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        console.error(`❌ Server Error:`, err.message);
+        res.status(500).json({ error: "Internal Server Error" });
     }
 });
 
@@ -323,7 +368,8 @@ app.get('/daily', async (req, res) => {
             };
         }));
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        console.error(`❌ Server Error:`, err.message);
+        res.status(500).json({ error: "Internal Server Error" });
     }
 });
 
@@ -398,8 +444,8 @@ app.get('/recipes/:id(*)', async (req, res) => {
             });
         }
     } catch (err) {
-        console.error(`🔥 Server Error:`, err);
-        res.status(500).json({ error: err.message });
+        console.error(`🔥 Server Error:`, err.message);
+        res.status(500).json({ error: "Internal Server Error" });
     }
 });
 
