@@ -71,12 +71,13 @@ const s3Client = new S3Client({
 
 function authenticate(req, res, next) {
     const apiKey = req.headers['x-api-key'];
-    if (req.path === '/ping') return next(); // Ping serbest
+    // Allow public access to ping and debug routes
+    if (req.path === '/ping' || req.path === '/debug/r2') return next();
     
     if (apiKey && apiKey === APP_API_KEY) {
         next();
     } else {
-        console.warn(`🚨 Unauthorized access attempt from IP: ${req.ip}`);
+        console.warn(`🚨 Unauthorized access attempt from IP: ${req.ip} for path: ${req.path}`);
         res.status(401).json({ error: "Unauthorized access. Invalid API Key." });
     }
 }
