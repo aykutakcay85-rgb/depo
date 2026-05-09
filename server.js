@@ -113,7 +113,7 @@ function getCategoryQuery(category) {
 async function getRecipeFromChunk(chunkId, recipeId) {
     try {
         const key = `chunk_${chunkId}.json`;
-        console.log(`📡 Fetching from R2: ${key} for recipe ${recipeId}`);
+        console.log(`📡 R2 FETCH: Bucket=${BUCKET_NAME}, Key=${key}, Recipe=${recipeId}`);
         const command = new GetObjectCommand({
             Bucket: BUCKET_NAME,
             Key: key,
@@ -124,20 +124,58 @@ async function getRecipeFromChunk(chunkId, recipeId) {
         const chunkData = JSON.parse(body);
         
         if (!Array.isArray(chunkData)) {
-            console.warn(`⚠️ Chunk ${chunkId} is not an array!`);
+            console.warn(`⚠️ R2 ERROR: Chunk ${key} is not an array!`);
             return null;
         }
 
         const tid = recipeId.toString().trim().toLowerCase();
-        return chunkData.find(r => {
+        const found = chunkData.find(r => {
             const rid = (r.i || r.id || '').toString().trim().toLowerCase();
             return rid === tid;
         });
+
+        if (found) {
+            console.log(`✅ R2 MATCH: Found details for ${recipeId} in ${key}`);
+            return found;
+        } else {
+            console.warn(`❌ R2 MISMATCH: Recipe ${recipeId} NOT in ${key} (Searched ${chunkData.length} items)`);
+            // Debug: log first item's ID in chunk to see format
+            if (chunkData.length > 0) {
+                console.log(`🔍 Chunk Sample ID: ${chunkData[0].i || chunkData[0].id}`);
+            }
+            return null;
+        }
     } catch (err) {
-        console.error(`❌ Error fetching chunk ${chunkId} from R2:`, err.message);
+        console.error(`🔥 R2 ERROR: Failed to fetch ${chunkId}:`, err.message);
         return null;
     }
 }
+
+app.get('/debug/r2', async (req, res) => {
+    try {
+        const command = new GetObjectCommand({
+            Bucket: BUCKET_NAME,
+            Key: 'chunk_1.json',
+        });
+        const response = await s3Client.send(command);
+        const body = await response.Body.transformToString();
+        const data = JSON.parse(body);
+        res.json({
+            status: "ok",
+            bucket: BUCKET_NAME,
+            chunk_1_size: body.length,
+            recipe_count: data.length,
+            sample_id: data[0].i
+        });
+    } catch (err) {
+        res.status(500).json({
+            status: "error",
+            bucket: BUCKET_NAME,
+            error: err.message,
+            stack: err.stack
+        });
+    }
+});
 
 app.get('/recipes/count', async (req, res) => {
     try {
