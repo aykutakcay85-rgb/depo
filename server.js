@@ -55,6 +55,7 @@ const mongoClient = new MongoClient(MONGO_URI);
 const s3Client = new S3Client({
     region: "auto",
     endpoint: R2_ENDPOINT,
+    forcePathStyle: true, // R2 SSL hatalarını önlemek için kritik
     credentials: {
         accessKeyId: R2_ACCESS_KEY,
         secretAccessKey: R2_SECRET_KEY,
@@ -62,7 +63,7 @@ const s3Client = new S3Client({
     requestHandler: new NodeHttpHandler({
         connectionTimeout: 10000,
         socketTimeout: 10000,
-        maxSockets: 500, // Devasa artış
+        maxSockets: 500, 
     }),
 });
 
