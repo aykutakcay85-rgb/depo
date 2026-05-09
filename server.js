@@ -113,6 +113,7 @@ function getCategoryQuery(category) {
 async function getRecipeFromChunk(chunkId, recipeId) {
     try {
         const key = `chunk_${chunkId}.json`;
+        console.log(`📡 Fetching from R2: ${key} for recipe ${recipeId}`);
         const command = new GetObjectCommand({
             Bucket: BUCKET_NAME,
             Key: key,
@@ -122,12 +123,18 @@ async function getRecipeFromChunk(chunkId, recipeId) {
         const body = await response.Body.transformToString();
         const chunkData = JSON.parse(body);
         
-        return chunkData.find(r => (r.i === recipeId || r.id === recipeId));
+        if (!Array.isArray(chunkData)) {
+            console.warn(`⚠️ Chunk ${chunkId} is not an array!`);
+            return null;
+        }
+
+        const tid = recipeId.toString().trim().toLowerCase();
+        return chunkData.find(r => {
+            const rid = (r.i || r.id || '').toString().trim().toLowerCase();
+            return rid === tid;
+        });
     } catch (err) {
         console.error(`❌ Error fetching chunk ${chunkId} from R2:`, err.message);
-        if (err.name === 'SyntaxError') {
-            console.error(`❌ JSON Parse Error in chunk ${chunkId}. File might be corrupt.`);
-        }
         return null;
     }
 }
@@ -140,10 +147,8 @@ app.get('/recipes/count', async (req, res) => {
         
         let count;
         if (category) {
-            // Belirli bir kategori isteniyorsa
             count = await collection.countDocuments({ c: { $regex: '^' + category + '$', $options: 'i' } });
         } else {
-            // Toplam sayı isteniyorsa (Hızlı)
             count = await collection.estimatedDocumentCount();
         }
         res.json({ count });
@@ -180,7 +185,6 @@ app.get('/recipes/categories/:category/subs', async (req, res) => {
 
         let pipeline;
         if (category.toLowerCase() === 'main') {
-            // Ana yemekler için özel durum: Gerçek alt kategoriler + İlgili ana kategoriler
             pipeline = [
                 { $match: { c: getCategoryQuery(category) } },
                 { $facet: {
@@ -193,7 +197,6 @@ app.get('/recipes/categories/:category/subs', async (req, res) => {
             ];
             const [result] = await collection.aggregate(pipeline).toArray();
             let all = result.all.filter(s => s && s !== 'null');
-            // 'Main Dishes' kendisini listeden çıkaralım ki sonsuz döngü olmasın
             all = all.filter(s => !s.toLowerCase().includes('main dish'));
             res.json(all.sort());
         } else {
@@ -231,7 +234,6 @@ app.get('/recipes', async (req, res) => {
         const db = mongoClient.db("foodi");
         const collection = db.collection("chefaykut");
 
-        // Advanced Search with Atlas Search (If query_text provided)
         if (query_text && query_text.length > 1) {
             try {
                 const searchPipeline = [
@@ -281,12 +283,10 @@ app.get('/recipes', async (req, res) => {
                 const searchResults = await collection.aggregate(searchPipeline).toArray();
                 return res.json(searchResults.map(r => _formatRecipe(r)));
             } catch (searchErr) {
-                console.warn("⚠️ Atlas Search failed or not configured, falling back to Regex:", searchErr.message);
-                // Fallback to regex logic below...
+                console.warn("⚠️ Atlas Search failed, falling back to Regex:", searchErr.message);
             }
         }
 
-        // Standard Query Logic
         let query = {};
         if (category) query.c = getCategoryQuery(category);
         if (subcategory) {
@@ -295,7 +295,6 @@ app.get('/recipes', async (req, res) => {
         }
         if (query_text) query.t = { $regex: '^' + query_text, $options: 'i' };
 
-        // Sort by rating for better first impression
         const recipes = await collection.find(query)
             .sort({ r: -1 }) 
             .skip(page * limit)
@@ -309,7 +308,6 @@ app.get('/recipes', async (req, res) => {
     }
 });
 
-// Helper to format recipe consistently
 function _formatRecipe(r) {
     const cat = (r.c || r.category || '').toLowerCase();
     const fallbackImages = {
@@ -329,34 +327,35 @@ function _formatRecipe(r) {
         img = fallbackImages[key];
     }
 
-    const id = r.i || r.id || r.uid || r._id.toString();
+    const id = r.i || r.id || r.uid || (r._id ? r._id.toString() : '');
     return {
         i: id,
-        t: r.t || r.title || r.name,
-        c: r.c || r.category || r.main_category,
-        s: r.s || r.subcategory || r.sub_category,
+        t: r.t || r.title || r.name || 'Untitled Recipe',
+        c: r.c || r.category || r.main_category || 'General',
+        s: r.s || r.subcategory || r.sub_category || '',
         h: r.h !== undefined ? r.h : (r.chunk !== undefined ? r.chunk : null),
         r: r.r || r.rating || 0,
         p: img,
+        // Detailed data if present (for non-chunked recipes)
+        m: r.m || r.ingredients || [],
+        y: r.y || r.steps || [],
+        g: r.g || r.nb_servings || r.servings || '',
+        l: r.l || r.prep_time || r.total_time || '',
         // Legacy support
         id: id,
-        title: r.t || r.title || r.name,
-        category: r.c || r.category || r.main_category,
+        title: r.t || r.title || r.name || 'Untitled Recipe',
+        category: r.c || r.category || r.main_category || 'General',
         image: img
     };
 }
-
 
 app.get('/daily', async (req, res) => {
     try {
         const db = mongoClient.db("foodi");
         const collection = db.collection("chefaykut");
-        
-        // Count documents
         const count = await collection.estimatedDocumentCount();
         const limit = 20;
         
-        // Generate daily seed based on UTC Date
         const today = new Date();
         const seedStr = `${today.getUTCFullYear()}-${today.getUTCMonth()}-${today.getUTCDate()}`;
         
@@ -367,26 +366,8 @@ app.get('/daily', async (req, res) => {
         }
         hash = Math.abs(hash);
         
-        // Calculate offset (seeded pseudo-random)
         const offset = hash % (count > limit ? count - limit : 1);
-        
-        // Tüm tarifleri çek (img filtresi KALDIRILDI - çoğu kayıtta img yok)
-        const recipes = await collection.find({})
-            .skip(offset)
-            .limit(limit)
-            .toArray();
-        
-        // Fallback image map (kategoriye göre)
-        const fallbackImages = {
-            'dessert':   'https://images.unsplash.com/photo-1551024506-0bccd828d307?q=80&w=500',
-            'soup':      'https://images.unsplash.com/photo-1547592166-23ac45744acd?q=80&w=500',
-            'salad':     'https://images.unsplash.com/photo-1512621776951-a57141f2eefd?q=80&w=500',
-            'beef':      'https://images.unsplash.com/photo-1544025162-d76694265947?q=80&w=500',
-            'chicken':   'https://images.unsplash.com/photo-1604908176997-125f25cc6f3d?q=80&w=500',
-            'breakfast': 'https://images.unsplash.com/photo-1482049016688-2d3e1b311543?q=80&w=500',
-            'pasta':     'https://images.unsplash.com/photo-1555949258-eb67b1ef0ceb?q=80&w=500',
-            'default':   'https://images.unsplash.com/photo-1504674900247-0877df9cc836?q=80&w=500'
-        };
+        const recipes = await collection.find({}).skip(offset).limit(limit).toArray();
             
         res.json(recipes.map(r => _formatRecipe(r)));
     } catch (err) {
@@ -403,17 +384,13 @@ app.get('/recipes/:id(*)', async (req, res) => {
         
         console.log(`🔍 API Request for ID: ${targetId}`);
         
-        // Try searching by custom ID field 'i' first, then by MongoDB's internal _id
         let query = { i: targetId };
         let recipe = await collection.findOne(query);
 
         if (!recipe && targetId.length === 24) {
             try {
                 recipe = await collection.findOne({ _id: new ObjectId(targetId) });
-                if (recipe) console.log(`✅ Found by ObjectId: ${targetId}`);
-            } catch (e) {
-                console.log(`⚠️ Invalid ObjectId format: ${targetId}`);
-            }
+            } catch (e) {}
         }
 
         if (!recipe) {
@@ -421,38 +398,25 @@ app.get('/recipes/:id(*)', async (req, res) => {
             return res.status(404).json({ error: "Recipe not found in database", id: targetId });
         }
 
-        console.log(`✅ Found in Mongo. Chunk: ${recipe.h}, Title: ${recipe.t}`);
+        // Always format base data
+        const base = _formatRecipe(recipe);
 
         if (recipe.h !== undefined && recipe.h !== null) {
-            console.log(`📡 Fetching from R2: chunk_${recipe.h}.json...`);
+            console.log(`📡 Attempting hydration from chunk ${recipe.h} for ${recipe.i}`);
             const details = await getRecipeFromChunk(recipe.h, recipe.i);
             
             if (details) {
                 console.log(`✨ Successfully hydrated from R2!`);
-                const base = _formatRecipe(recipe);
+                // Merge base info with details from chunk, prioritizing chunk data for ingredients/steps
                 return res.json({ ...base, ...details });
             } else {
-                console.log(`⚠️ Detail NOT found in chunk file for ID: ${recipe.i}`);
-                return res.status(404).json({ 
-                    error: "Detail not found in chunk file", 
-                    chunk: recipe.h,
-                    id: recipe.i 
-                });
+                console.warn(`⚠️ Detail NOT found in chunk file for ID: ${recipe.i}. Returning base info.`);
+                // Return base even if hydration fails so the user sees SOMETHING
+                return res.json(base);
             }
         } else {
             console.log(`📦 Returning embedded data for: ${recipe.t}`);
-            return res.json({
-                id: recipe.i,
-                title: recipe.t,
-                category: recipe.c,
-                subcategory: recipe.s,
-                chunk: null,
-                ingredients: recipe.ingredients || [],
-                steps: recipe.steps || [],
-                tips: recipe.tips || [],
-                suggestions: recipe.suggestions || [],
-                nutrition: recipe.nutrition || {}
-            });
+            return res.json(base);
         }
     } catch (err) {
         console.error(`🔥 Server Error:`, err.message);
