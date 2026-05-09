@@ -126,7 +126,7 @@ function getCategoryQuery(category) {
     }
 }
 
-async function getRecipeFromChunk(chunkId, recipeId) {
+async function getRecipeFromChunk(chunkId, recipeId, title = '') {
     try {
         const key = `chunk_${chunkId}.json`;
         console.log(`📡 R2 FETCH: Bucket=${BUCKET_NAME}, Key=${key}, Recipe=${recipeId}`);
@@ -134,28 +134,31 @@ async function getRecipeFromChunk(chunkId, recipeId) {
             Bucket: BUCKET_NAME,
             Key: key,
         });
-        
-        const response = await s3Client.send(command);
-        const body = await response.Body.transformToString();
-        const chunkData = JSON.parse(body);
-        
-        if (!Array.isArray(chunkData)) {
-            console.warn(`⚠️ R2 ERROR: Chunk ${key} is not an array!`);
-            return null;
-        }
 
-        const tid = recipeId.toString().trim().toLowerCase();
+        const response = await s3Client.send(command);
+        const data = await response.Body.transformToString();
+        const chunkData = JSON.parse(data);
+        console.log(`✅ Chunk loaded: ${key} (${chunkData.length} recipes)`);
+
         const found = chunkData.find(r => {
-            const rid = (r.i || r.id || '').toString().trim().toLowerCase();
-            return rid === tid;
+            const rid = (r.i || r.id || r.uid || '').toString();
+            const tid = recipeId.toString();
+            if (rid && rid === tid) return true;
+            
+            // Fallback: Match by title if it's a special category chunk
+            if (title && (chunkId === 'gastro' || chunkId === 'chef')) {
+                const rTitle = (r.t || r.title || '').toString().toLowerCase().trim();
+                const targetTitle = title.toLowerCase().trim();
+                return rTitle === targetTitle;
+            }
+            return false;
         });
 
         if (found) {
-            console.log(`✅ R2 MATCH: Found details for ${recipeId} in ${key}`);
+            console.log(`✨ R2 MATCH FOUND for ${recipeId}`);
             return found;
         } else {
-            console.warn(`❌ R2 MISMATCH: Recipe ${recipeId} NOT in ${key} (Searched ${chunkData.length} items)`);
-            // Debug: log first item's ID in chunk to see format
+            console.warn(`⚠️ R2 MISMATCH: Recipe ${recipeId} NOT found in ${key}`);
             return null;
         }
     } catch (err) {
@@ -334,7 +337,7 @@ app.get('/recipes', async (req, res) => {
     }
 });
 
-function _formatRecipe(r) {
+function _formatRecipe(r, details = null) {
     const cat = (r.c || r.category || '').toLowerCase();
     const fallbackImages = {
         'dessert':   'https://images.unsplash.com/photo-1551024506-0bccd828d307?q=80&w=500',
@@ -367,9 +370,9 @@ function _formatRecipe(r) {
         h: r.h !== undefined ? r.h : (r.chunk !== undefined ? r.chunk : null),
         r: r.r || r.rating || 0,
         p: img,
-        // Detailed data if present (for non-chunked recipes)
-        m: r.m || r.ingredients || [],
-        y: r.y || r.steps || [],
+        // Detailed data: prioritize details (from chunk) over r (from DB)
+        m: (details && details.m) || r.m || r.ingredients || [],
+        y: (details && details.y) || r.y || r.steps || r.instructions || [],
         g: r.g || r.nb_servings || r.servings || '',
         l: r.l || r.prep_time || r.total_time || '',
         // Legacy support
@@ -436,22 +439,18 @@ app.get('/recipes/:id(*)', async (req, res) => {
 
         if (recipe.h !== undefined && recipe.h !== null) {
             console.log(`📡 Attempting hydration from chunk ${recipe.h} for ${recipe.i}`);
-            const details = await getRecipeFromChunk(recipe.h, recipe.i);
+            const details = await getRecipeFromChunk(recipe.h, recipe.i || recipe._id, recipe.t || recipe.title);
             
             if (details) {
                 console.log(`✨ Successfully hydrated from R2! m_count: ${details.m ? details.m.length : 0}, y_count: ${details.y ? details.y.length : 0}`);
-                // Merge base info with details from chunk, prioritizing chunk data for ingredients/steps
-                const finalResponse = { ...base, ...details };
-                console.log(`📤 Sending response keys: ${Object.keys(finalResponse)}`);
-                return res.json(finalResponse);
+                return res.json(_formatRecipe(recipe, details));
             } else {
-                console.warn(`⚠️ Detail NOT found in chunk file for ID: ${recipe.i}. Returning base info.`);
-                return res.json(base);
+                console.warn(`⚠️ Hydration failed for ${recipe.i || recipe._id}, sending basic info`);
+                return res.json(_formatRecipe(recipe));
             }
-        } else {
-            console.log(`📦 Returning embedded data for: ${recipe.t}`);
-            return res.json(base);
         }
+
+        return res.json(_formatRecipe(recipe));
     } catch (err) {
         console.error(`🔥 Server Error:`, err.message);
         res.status(500).json({ error: "Internal Server Error" });
