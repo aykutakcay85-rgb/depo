@@ -7,3 +7,6 @@ yarn-error.log*
 pnpm-debug.log*
 .idea/
 .vscode/
+
+# Large data chunks
+chunk_*.json

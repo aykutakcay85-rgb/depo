@@ -50,9 +50,6 @@ if (!MONGO_URI || !APP_API_KEY) {
 }
 
 console.log("🚀 Server starting...");
-console.log(`📡 R2 Config: Endpoint=${R2_ENDPOINT ? R2_ENDPOINT.substring(0, 20) + '...' : 'MISSING'}`);
-console.log(`🔑 R2 AccessKey: ${R2_ACCESS_KEY ? R2_ACCESS_KEY.substring(0, 4) + '...' : 'MISSING'}`);
-console.log(`🔒 R2 SecretKey: ${R2_SECRET_KEY ? 'EXISTS (length: ' + R2_SECRET_KEY.length + ')' : 'MISSING'}`);
 
 
 // CLIENTS
@@ -89,8 +86,8 @@ const s3Client = new S3Client({
 
 function authenticate(req, res, next) {
     const apiKey = req.headers['x-api-key'];
-    // Allow public access to ping and debug routes
-    if (req.path === '/ping' || req.path === '/debug/r2') return next();
+    // Allow public access to ping
+    if (req.path === '/ping') return next();
     
     if (apiKey && apiKey === APP_API_KEY) {
         next();
@@ -105,8 +102,8 @@ app.use(authenticate);
 function getCategoryQuery(category) {
     const cat = category.toLowerCase();
     if (cat === 'all') return {};
-    if (cat === 'gastro') return { c: 'gastro' };
-    if (cat === 'chef_pro') return { c: 'chef_pro' };
+    if (cat === 'gastro') return { c: { $regex: '^gastro$', $options: 'i' } };
+    if (cat === 'chef_pro') return { c: { $regex: '^chef_pro$', $options: 'i' } };
     
     // Özel durumlar ve eşlemeler
     if (cat.includes('chef')) {
@@ -159,52 +156,14 @@ async function getRecipeFromChunk(chunkId, recipeId) {
         } else {
             console.warn(`❌ R2 MISMATCH: Recipe ${recipeId} NOT in ${key} (Searched ${chunkData.length} items)`);
             // Debug: log first item's ID in chunk to see format
-            if (chunkData.length > 0) {
-                console.log(`🔍 Chunk Sample ID: ${chunkData[0].i || chunkData[0].id}`);
-            }
             return null;
         }
     } catch (err) {
-        console.error(`🔥 R2 ERROR: Failed to fetch ${chunkId}:`, err.message);
         return null;
     }
 }
 
-app.get('/debug/r2', async (req, res) => {
-    try {
-        console.log(`🔍 DEBUG R2 Connection: Endpoint=${cleanEndpoint.substring(0, 15)}..., Bucket=${BUCKET_NAME}`);
-        const command = new GetObjectCommand({
-            Bucket: BUCKET_NAME,
-            Key: 'chunk_1.json',
-        });
-        const response = await s3Client.send(command);
-        const body = await response.Body.transformToString();
-        const data = JSON.parse(body);
-        res.json({
-            status: "ok",
-            node_version: process.version,
-            bucket: BUCKET_NAME,
-            chunk_1_size: body.length,
-            recipe_count: data.length,
-            sample_id: data[0].i
-        });
-    } catch (err) {
-        const mask = (str) => str ? `${str.substring(0, 4)}...${str.substring(str.length - 4)}` : 'MISSING';
-        res.status(500).json({
-            status: "error",
-            node_version: process.version,
-            bucket: BUCKET_NAME,
-            endpoint_used: cleanEndpoint,
-            keys_info: {
-                access_key: mask(R2_ACCESS_KEY),
-                secret_key: mask(R2_SECRET_KEY),
-                secret_length: R2_SECRET_KEY ? R2_SECRET_KEY.length : 0
-            },
-            error: err.message,
-            stack: err.stack
-        });
-    }
-});
+
 
 app.get('/recipes/count', async (req, res) => {
     try {
@@ -388,8 +347,13 @@ function _formatRecipe(r) {
         'default':   'https://images.unsplash.com/photo-1504674900247-0877df9cc836?q=80&w=500'
     };
 
+    // Priority: img -> image -> p (compressed)
     let img = r.img || r.image || r.p;
-    if (!img || img.length < 5) {
+    
+    // Check if the image is a valid URL (not a dummy string or too short)
+    const isValidImg = img && img.length > 10 && (img.startsWith('http') || img.startsWith('https'));
+    
+    if (!isValidImg) {
         const key = Object.keys(fallbackImages).find(k => cat.includes(k)) || 'default';
         img = fallbackImages[key];
     }
