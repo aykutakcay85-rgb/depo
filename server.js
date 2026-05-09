@@ -350,13 +350,18 @@ function _formatRecipe(r, details = null) {
         'default':   'https://images.unsplash.com/photo-1504674900247-0877df9cc836?q=80&w=500'
     };
 
-    // Priority: details.p (from R2) -> r.img -> r.image -> r.p (from DB)
-    let img = (details && details.p) || r.img || r.image || r.p;
+    // Logic: Try DB first, then R2 details
+    let dbImg = r.img || r.image || r.p;
+    let r2Img = details ? (details.p || details.img || details.image) : null;
     
-    // Check if the image is a valid URL (not a dummy string or too short)
-    const isValidImg = img && img.length > 10 && (img.startsWith('http') || img.startsWith('https'));
-    
-    if (!isValidImg) {
+    const isValid = (url) => url && url.length > 10 && (url.startsWith('http') || url.startsWith('https'));
+
+    let img;
+    if (isValid(dbImg)) {
+        img = dbImg;
+    } else if (isValid(r2Img)) {
+        img = r2Img;
+    } else {
         const key = Object.keys(fallbackImages).find(k => cat.includes(k)) || 'default';
         img = fallbackImages[key];
     }
