@@ -350,8 +350,8 @@ function _formatRecipe(r, details = null) {
         'default':   'https://images.unsplash.com/photo-1504674900247-0877df9cc836?q=80&w=500'
     };
 
-    // Priority: img -> image -> p (compressed)
-    let img = r.img || r.image || r.p;
+    // Priority: details.p (from R2) -> r.img -> r.image -> r.p (from DB)
+    let img = (details && details.p) || r.img || r.image || r.p;
     
     // Check if the image is a valid URL (not a dummy string or too short)
     const isValidImg = img && img.length > 10 && (img.startsWith('http') || img.startsWith('https'));
