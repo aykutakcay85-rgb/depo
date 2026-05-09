@@ -72,16 +72,11 @@ try {
 const s3Client = new S3Client({
     region: "auto",
     endpoint: cleanEndpoint,
-    forcePathStyle: true, 
+    forcePathStyle: true,
     credentials: {
         accessKeyId: R2_ACCESS_KEY,
         secretAccessKey: R2_SECRET_KEY,
     },
-    requestHandler: new NodeHttpHandler({
-        connectionTimeout: 10000,
-        socketTimeout: 10000,
-        maxSockets: 500, 
-    }),
 });
 
 // SECURITY: API KEY
