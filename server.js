@@ -49,6 +49,11 @@ if (!MONGO_URI || !APP_API_KEY) {
     process.exit(1);
 }
 
+console.log("🚀 Server starting...");
+console.log(`📡 R2 Config: Endpoint=${R2_ENDPOINT ? R2_ENDPOINT.substring(0, 20) + '...' : 'MISSING'}`);
+console.log(`🔑 R2 AccessKey: ${R2_ACCESS_KEY ? R2_ACCESS_KEY.substring(0, 4) + '...' : 'MISSING'}`);
+console.log(`🔒 R2 SecretKey: ${R2_SECRET_KEY ? 'EXISTS (length: ' + R2_SECRET_KEY.length + ')' : 'MISSING'}`);
+
 
 // CLIENTS
 const mongoClient = new MongoClient(MONGO_URI);
@@ -184,11 +189,17 @@ app.get('/debug/r2', async (req, res) => {
             sample_id: data[0].i
         });
     } catch (err) {
+        const mask = (str) => str ? `${str.substring(0, 4)}...${str.substring(str.length - 4)}` : 'MISSING';
         res.status(500).json({
             status: "error",
             node_version: process.version,
             bucket: BUCKET_NAME,
-            endpoint_used: cleanEndpoint.substring(0, 20) + "...",
+            endpoint_used: cleanEndpoint,
+            keys_info: {
+                access_key: mask(R2_ACCESS_KEY),
+                secret_key: mask(R2_SECRET_KEY),
+                secret_length: R2_SECRET_KEY ? R2_SECRET_KEY.length : 0
+            },
             error: err.message,
             stack: err.stack
         });
