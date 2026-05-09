@@ -398,6 +398,8 @@ app.get('/recipes/:id(*)', async (req, res) => {
             return res.status(404).json({ error: "Recipe not found in database", id: targetId });
         }
 
+        console.log(`✅ Found in Mongo: ${recipe.t} (ID: ${recipe.i}, h: ${recipe.h}, _id: ${recipe._id})`);
+
         // Always format base data
         const base = _formatRecipe(recipe);
 
@@ -406,12 +408,13 @@ app.get('/recipes/:id(*)', async (req, res) => {
             const details = await getRecipeFromChunk(recipe.h, recipe.i);
             
             if (details) {
-                console.log(`✨ Successfully hydrated from R2!`);
+                console.log(`✨ Successfully hydrated from R2! m_count: ${details.m ? details.m.length : 0}, y_count: ${details.y ? details.y.length : 0}`);
                 // Merge base info with details from chunk, prioritizing chunk data for ingredients/steps
-                return res.json({ ...base, ...details });
+                const finalResponse = { ...base, ...details };
+                console.log(`📤 Sending response keys: ${Object.keys(finalResponse)}`);
+                return res.json(finalResponse);
             } else {
                 console.warn(`⚠️ Detail NOT found in chunk file for ID: ${recipe.i}. Returning base info.`);
-                // Return base even if hydration fails so the user sees SOMETHING
                 return res.json(base);
             }
         } else {
