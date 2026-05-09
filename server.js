@@ -52,10 +52,27 @@ if (!MONGO_URI || !APP_API_KEY) {
 
 // CLIENTS
 const mongoClient = new MongoClient(MONGO_URI);
+
+// R2 Endpoint temizleme (SSL hatalarını önlemek için)
+let cleanEndpoint = R2_ENDPOINT.trim();
+if (!cleanEndpoint.startsWith('http')) cleanEndpoint = `https://${cleanEndpoint}`;
+// Eğer sonunda /foodi veya / kova adı varsa temizle
+cleanEndpoint = cleanEndpoint.replace(/\/+$/, '').replace(/\/[a-zA-Z0-9._-]+$/, (match) => {
+    // Sadece /foodi gibi kısımları, eğer .com veya .net sonrası geliyorsa temizle
+    return match.includes('cloudflarestorage.com') ? match : '';
+});
+// Daha basit ve kesin yöntem: Sadece hostname kısmını al
+try {
+    const url = new URL(cleanEndpoint);
+    cleanEndpoint = `${url.protocol}//${url.hostname}`;
+} catch (e) {
+    console.warn("⚠️ Endpoint URL parse hatası, ham değer kullanılıyor.");
+}
+
 const s3Client = new S3Client({
-    region: "auto",
-    endpoint: R2_ENDPOINT,
-    forcePathStyle: true, // R2 SSL hatalarını önlemek için kritik
+    region: "us-east-1",
+    endpoint: cleanEndpoint,
+    forcePathStyle: true, 
     credentials: {
         accessKeyId: R2_ACCESS_KEY,
         secretAccessKey: R2_SECRET_KEY,
@@ -155,6 +172,7 @@ async function getRecipeFromChunk(chunkId, recipeId) {
 
 app.get('/debug/r2', async (req, res) => {
     try {
+        console.log(`🔍 DEBUG R2 Connection: Endpoint=${cleanEndpoint.substring(0, 15)}..., Bucket=${BUCKET_NAME}`);
         const command = new GetObjectCommand({
             Bucket: BUCKET_NAME,
             Key: 'chunk_1.json',
@@ -164,6 +182,7 @@ app.get('/debug/r2', async (req, res) => {
         const data = JSON.parse(body);
         res.json({
             status: "ok",
+            node_version: process.version,
             bucket: BUCKET_NAME,
             chunk_1_size: body.length,
             recipe_count: data.length,
@@ -172,7 +191,9 @@ app.get('/debug/r2', async (req, res) => {
     } catch (err) {
         res.status(500).json({
             status: "error",
+            node_version: process.version,
             bucket: BUCKET_NAME,
+            endpoint_used: cleanEndpoint.substring(0, 20) + "...",
             error: err.message,
             stack: err.stack
         });
