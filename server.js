@@ -135,10 +135,25 @@ async function getRecipeFromChunk(chunkId, recipeId, title = '') {
             Key: key,
         });
 
-        const response = await s3Client.send(command);
-        const data = await response.Body.transformToString();
-        const chunkData = JSON.parse(data);
-        console.log(`✅ Chunk loaded: ${key} (${chunkData.length} recipes)`);
+        let chunkData;
+        try {
+            const response = await s3Client.send(command);
+            const data = await response.Body.transformToString();
+            chunkData = JSON.parse(data);
+            console.log(`✅ Chunk loaded from R2: ${key} (${chunkData.length} recipes)`);
+        } catch (r2err) {
+            console.warn(`⚠️ R2 Fetch failed for ${key}, trying local fallback...`);
+            const fs = require('fs');
+            const path = require('path');
+            const localPath = path.join(__dirname, key);
+            if (fs.existsSync(localPath)) {
+                const localData = fs.readFileSync(localPath, 'utf8');
+                chunkData = JSON.parse(localData);
+                console.log(`✅ Chunk loaded from LOCAL fallback: ${key} (${chunkData.length} recipes)`);
+            } else {
+                throw new Error(`Chunk ${key} not found in R2 or local fallback.`);
+            }
+        }
 
         const found = chunkData.find(r => {
             const rid = (r.i || r.id || r.uid || '').toString();
