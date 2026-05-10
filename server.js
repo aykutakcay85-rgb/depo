@@ -102,13 +102,15 @@ app.use(authenticate);
 function getCategoryQuery(category) {
     const cat = category.toLowerCase();
     if (cat === 'all') return {};
-    if (cat === 'gastro') return { h: 'gastro' };
-    if (cat === 'chef_pro' || cat === 'chef') return { h: 'chef' };
+    if (cat === 'gastro') return { c: { $regex: '^gastro$', $options: 'i' } };
+    
+    // Yalnızca Gerkçek Chef Pro tariflerini getir (Gastro ile karışmasını önler)
+    if (cat === 'chef_pro' || cat === 'chef' || cat.includes('chef')) {
+        return { c: { $regex: '^chef_pro$', $options: 'i' } };
+    }
     
     // Özel durumlar ve eşlemeler
-    if (cat.includes('chef')) {
-        return { h: 'chef' };
-    } else if (cat === 'main') {
+    if (cat === 'main') {
         return { c: { $regex: 'Main Dishes|Et Yemekleri|Tavuk Yemekleri|Balık Yemekleri|Kebap|Köfte|Sebze Yemekleri|Dolma-Sarma|Bakliyat|Pilav|Makarna', $options: 'i' } };
     } else if (cat === 'appetizer') {
         return { c: { $regex: 'Appetizer', $options: 'i' } };
