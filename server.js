@@ -20,7 +20,7 @@ const limiter = rateLimit({
     standardHeaders: true,
     legacyHeaders: false,
 });
-app.use(limiter);
+// app.use(limiter); // User requested infinite requests, so rate limiter is disabled
 
 // SECURITY: CORS Configuration
 const allowedOrigins = process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : ['*'];
@@ -102,27 +102,27 @@ app.use(authenticate);
 function getCategoryQuery(category) {
     const cat = category.toLowerCase();
     if (cat === 'all') return {};
-    if (cat === 'gastro') return { c: { $regex: '^gastro$', $options: 'i' } };
-    if (cat === 'chef_pro') return { c: { $regex: '^chef_pro$', $options: 'i' } };
+    if (cat === 'gastro') return { h: 'gastro' };
+    if (cat === 'chef_pro' || cat === 'chef') return { h: 'chef' };
     
     // Özel durumlar ve eşlemeler
     if (cat.includes('chef')) {
-        return { $regex: 'Chef', $options: 'i' };
+        return { h: 'chef' };
     } else if (cat === 'main') {
-        return { $regex: 'Main Dishes|Et Yemekleri|Tavuk Yemekleri|Balık Yemekleri|Kebap|Köfte|Sebze Yemekleri|Dolma-Sarma|Bakliyat|Pilav|Makarna', $options: 'i' };
+        return { c: { $regex: 'Main Dishes|Et Yemekleri|Tavuk Yemekleri|Balık Yemekleri|Kebap|Köfte|Sebze Yemekleri|Dolma-Sarma|Bakliyat|Pilav|Makarna', $options: 'i' } };
     } else if (cat === 'appetizer') {
-        return { $regex: 'Appetizer', $options: 'i' };
+        return { c: { $regex: 'Appetizer', $options: 'i' } };
     } else if (cat === 'breakfast') {
-        return { $regex: 'Breakfast', $options: 'i' };
+        return { c: { $regex: 'Breakfast', $options: 'i' } };
     } else if (cat === 'sauce') {
-        return { $regex: 'Sauce|Sos', $options: 'i' };
+        return { c: { $regex: 'Sauce|Sos', $options: 'i' } };
     } else if (cat === 'beverage') {
-        return { $regex: 'Beverage|İçecek', $options: 'i' };
+        return { c: { $regex: 'Beverage|İçecek', $options: 'i' } };
     } else if (cat === 'preserve') {
-        return { $regex: 'Preserve|Reçel|Konserve|Kış Hazırlıkları', $options: 'i' };
+        return { c: { $regex: 'Preserve|Reçel|Konserve|Kış Hazırlıkları', $options: 'i' } };
     } else {
         const safeCategory = category.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        return { $regex: '^' + safeCategory + '$', $options: 'i' };
+        return { c: { $regex: '^' + safeCategory + '$', $options: 'i' } };
     }
 }
 
@@ -230,7 +230,7 @@ app.get('/recipes/categories/:category/subs', async (req, res) => {
         let pipeline;
         if (category.toLowerCase() === 'main') {
             pipeline = [
-                { $match: { c: getCategoryQuery(category) } },
+                { $match: getCategoryQuery(category) },
                 { $facet: {
                     subs: [ { $group: { _id: "$s" } } ],
                     cats: [ { $group: { _id: "$c" } } ]
@@ -245,7 +245,7 @@ app.get('/recipes/categories/:category/subs', async (req, res) => {
             res.json(all.sort());
         } else {
             pipeline = [
-                { $match: { c: getCategoryQuery(category) } },
+                { $match: getCategoryQuery(category) },
                 { $group: { _id: "$s" } },
                 { $match: { _id: { $ne: null } } },
                 { $sort: { _id: 1 } },
@@ -316,12 +316,22 @@ app.get('/recipes', async (req, res) => {
                 ];
                 
                 if (category) {
-                    searchPipeline[0].$search.compound.filter = [{
-                        text: {
-                            query: category,
-                            path: "c"
-                        }
-                    }];
+                    const catQuery = getCategoryQuery(category);
+                    if (catQuery.c && catQuery.c.$regex) {
+                        searchPipeline[0].$search.compound.filter = [{
+                            text: {
+                                query: category,
+                                path: "c"
+                            }
+                        }];
+                    } else if (catQuery.h) {
+                        searchPipeline[0].$search.compound.filter = [{
+                            text: {
+                                query: catQuery.h,
+                                path: "h"
+                            }
+                        }];
+                    }
                 }
 
                 const searchResults = await collection.aggregate(searchPipeline).toArray();
@@ -332,7 +342,9 @@ app.get('/recipes', async (req, res) => {
         }
 
         let query = {};
-        if (category) query.c = getCategoryQuery(category);
+        if (category) {
+            Object.assign(query, getCategoryQuery(category));
+        }
         if (subcategory) {
             const safeSub = subcategory.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
             query.$or = [{ s: { $regex: safeSub, $options: 'i' } }, { c: { $regex: '^' + safeSub + '$', $options: 'i' } }];
