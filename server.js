@@ -103,13 +103,9 @@ function getCategoryQuery(category) {
     const cat = category.toLowerCase();
     if (cat === 'all') return {};
     if (cat === 'gastro') return { c: { $regex: '^gastro$', $options: 'i' } };
-    
-    // Yalnızca Gerkçek Chef Pro tariflerini getir (Gastro ile karışmasını önler)
     if (cat === 'chef_pro' || cat === 'chef' || cat.includes('chef')) {
         return { c: { $regex: '^chef_pro$', $options: 'i' } };
     }
-    
-    // Özel durumlar ve eşlemeler
     if (cat === 'main') {
         return { c: { $regex: 'Main Dishes|Et Yemekleri|Tavuk Yemekleri|Balık Yemekleri|Kebap|Köfte|Sebze Yemekleri|Dolma-Sarma|Bakliyat|Pilav|Makarna', $options: 'i' } };
     } else if (cat === 'appetizer') {
@@ -280,6 +276,47 @@ app.get('/recipes', async (req, res) => {
         const db = mongoClient.db("foodi");
         const collection = db.collection("chefaykut");
 
+        // ── Chef Pro: Doğrudan R2 chunk'tan serve et ──────────────────────────
+        const cat = (category || '').toLowerCase();
+        if (cat === 'chef' || cat === 'chef_pro' || cat.includes('chef')) {
+            try {
+                const chunkKey = 'chunk_chef.json';
+                const cmd = new GetObjectCommand({ Bucket: BUCKET_NAME, Key: chunkKey });
+                let chefChunk;
+                try {
+                    const r2res = await s3Client.send(cmd);
+                    const raw = await r2res.Body.transformToString();
+                    chefChunk = JSON.parse(raw);
+                } catch {
+                    const fs = require('fs'), path = require('path');
+                    const localPath = path.join(__dirname, chunkKey);
+                    chefChunk = JSON.parse(require('fs').readFileSync(localPath, 'utf8'));
+                }
+                const start = page * limit;
+                const slice = chefChunk.slice(start, start + limit);
+                return res.json(slice.map(r => ({
+                    i: r.i || r.id || r.uid || '',
+                    t: r.t || r.title || '',
+                    c: 'chef_pro',
+                    h: 'chef',
+                    p: r.p || r.img || r.image || '',
+                    r: r.r || r.rating || 0,
+                    s: r.s || r.subcategory || '',
+                    g: r.g || r.nb_servings || '',
+                    l: r.l || r.total_time || r.prep_time || '',
+                    m: r.m || r.ingredients || [],
+                    y: r.y || r.steps || r.instructions || [],
+                    id: r.i || r.id || r.uid || '',
+                    title: r.t || r.title || '',
+                    category: 'chef_pro',
+                    image: r.p || r.img || r.image || '',
+                })));
+            } catch (chefErr) {
+                console.warn('⚠️ Chef chunk serve failed:', chefErr.message);
+                // Fallback to MongoDB
+            }
+        }
+
         if (query_text && query_text.length > 1) {
             try {
                 const searchPipeline = [
@@ -404,9 +441,9 @@ function _formatRecipe(r, details = null) {
         h: r.h !== undefined ? r.h : (r.chunk !== undefined ? r.chunk : null),
         r: r.r || r.rating || 0,
         p: img,
-        // Detailed data: prioritize details (from chunk) over r (from DB)
-        m: (details && details.m) || r.m || r.ingredients || [],
-        y: (details && details.y) || r.y || r.steps || r.instructions || [],
+        // Detailed data: check all possible field names from both R2 chunk (details) and MongoDB (r)
+        m: (details && (details.m || details.ingredients)) || r.m || r.ingredients || r.malzemeler || r.icindekiler || [],
+        y: (details && (details.y || details.steps || details.instructions)) || r.y || r.steps || r.instructions || r.yapilis || [],
         g: r.g || r.nb_servings || r.servings || '',
         l: r.l || r.prep_time || r.total_time || '',
         // Legacy support
