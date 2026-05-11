@@ -179,6 +179,91 @@ async function getRecipeFromChunk(chunkId, recipeId, title = '') {
     }
 }
 
+// ── AUTHENTICATION ENDPOINTS ──────────────────────────────
+
+app.post('/auth/register', async (req, res) => {
+    try {
+        const { email, password, name } = req.body;
+        if (!email || !password) return res.status(400).json({ error: "Email and password required" });
+
+        const db = mongoClient.db("foodi");
+        const users = db.collection("users");
+
+        const existing = await users.findOne({ email });
+        if (existing) return res.status(400).json({ error: "User already exists" });
+
+        const newUser = {
+            email,
+            password, // NOTE: In production, hash this password!
+            name: name || email.split('@')[0],
+            createdAt: new Date(),
+            lastLogin: new Date(),
+            isPremium: false
+        };
+
+        await users.insertOne(newUser);
+        res.status(201).json({ message: "User registered successfully" });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/auth/login', async (req, res) => {
+    try {
+        const { email, password } = req.body;
+        const db = mongoClient.db("foodi");
+        const users = db.collection("users");
+
+        const user = await users.findOne({ email, password });
+        if (!user) return res.status(401).json({ error: "Invalid credentials" });
+
+        await users.updateOne({ _id: user._id }, { $set: { lastLogin: new Date() } });
+
+        res.json({
+            message: "Login successful",
+            token: "chef_aykut_token_" + user._id,
+            user: { email: user.email, name: user.name, isPremium: user.isPremium }
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/auth/social-login', async (req, res) => {
+    try {
+        const { email, name, provider, uid } = req.body;
+        if (!email) return res.status(400).json({ error: "Email required" });
+
+        const db = mongoClient.db("foodi");
+        const users = db.collection("users");
+
+        let user = await users.findOne({ email });
+
+        if (!user) {
+            user = {
+                email,
+                name: name || email.split('@')[0],
+                provider: provider || 'unknown',
+                providerId: uid,
+                createdAt: new Date(),
+                lastLogin: new Date(),
+                isPremium: false
+            };
+            await users.insertOne(user);
+        } else {
+            await users.updateOne({ _id: user._id }, { $set: { lastLogin: new Date(), providerId: uid } });
+        }
+
+        res.json({
+            message: "Social login successful",
+            token: "chef_aykut_token_" + user._id,
+            user: { email: user.email, name: user.name, isPremium: user.isPremium }
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 
 
 app.get('/recipes/count', async (req, res) => {
