@@ -124,41 +124,55 @@ function getCategoryQuery(category) {
     }
 }
 
-async function getRecipeFromChunk(chunkId, recipeId, title = '') {
+async function getRecipeFromChunk(chunkId, recipeId, title = '', offset = null, length = null) {
     try {
-        const key = `chunk_${chunkId}.json`;
-        console.log(`📡 R2 FETCH: Bucket=${BUCKET_NAME}, Key=${key}, Recipe=${recipeId}`);
+        let key;
+        let range = undefined;
+
+        if (offset !== null && length !== null) {
+            // New Pattern: Partial fetch from recipes.txt.partX
+            key = `recipes.txt.part${chunkId}`;
+            range = `bytes=${offset}-${offset + length - 1}`;
+            console.log(`📡 R2 PARTIAL FETCH: Key=${key}, Range=${range}`);
+        } else {
+            // Old Pattern: Full JSON chunk
+            key = `chunk_${chunkId}.json`;
+            console.log(`📡 R2 FULL FETCH: Key=${key}`);
+        }
+
         const command = new GetObjectCommand({
             Bucket: BUCKET_NAME,
             Key: key,
+            Range: range
         });
 
-        let chunkData;
+        let data;
         try {
             const response = await s3Client.send(command);
-            const data = await response.Body.transformToString();
-            chunkData = JSON.parse(data);
-            console.log(`✅ Chunk loaded from R2: ${key} (${chunkData.length} recipes)`);
+            data = await response.Body.transformToString();
         } catch (r2err) {
-            console.warn(`⚠️ R2 Fetch failed for ${key}, trying local fallback...`);
-            const fs = require('fs');
-            const path = require('path');
-            const localPath = path.join(__dirname, key);
-            if (fs.existsSync(localPath)) {
-                const localData = fs.readFileSync(localPath, 'utf8');
-                chunkData = JSON.parse(localData);
-                console.log(`✅ Chunk loaded from LOCAL fallback: ${key} (${chunkData.length} recipes)`);
-            } else {
-                throw new Error(`Chunk ${key} not found in R2 or local fallback.`);
+            console.warn(`⚠️ R2 Fetch failed for ${key}, error: ${r2err.message}`);
+            return null;
+        }
+
+        if (range) {
+            // Partial text parts contain a single JSON object per recipe
+            try {
+                const recipe = JSON.parse(data);
+                console.log(`✨ R2 MATCH FOUND via Partial Get for ${recipeId}`);
+                return recipe;
+            } catch (pErr) {
+                console.error(`❌ Partial JSON Parse Error: ${pErr.message}`);
+                return null;
             }
         }
 
+        // Handle full JSON chunks
+        const chunkData = JSON.parse(data);
         const found = chunkData.find(r => {
             const rid = (r.i || r.id || r.uid || '').toString();
             const tid = recipeId.toString();
             if (rid && rid === tid) return true;
-            
-            // Fallback: Match by title if it's a special category chunk
             if (title && (chunkId === 'gastro' || chunkId === 'chef')) {
                 const rTitle = (r.t || r.title || '').toString().toLowerCase().trim();
                 const targetTitle = title.toLowerCase().trim();
@@ -167,14 +181,9 @@ async function getRecipeFromChunk(chunkId, recipeId, title = '') {
             return false;
         });
 
-        if (found) {
-            console.log(`✨ R2 MATCH FOUND for ${recipeId}`);
-            return found;
-        } else {
-            console.warn(`⚠️ R2 MISMATCH: Recipe ${recipeId} NOT found in ${key}`);
-            return null;
-        }
+        return found || null;
     } catch (err) {
+        console.error(`🔥 getRecipeFromChunk Error:`, err.message);
         return null;
     }
 }
@@ -502,7 +511,7 @@ function _formatRecipe(r, details = null) {
     };
 
     // Logic: Try DB first, then R2 details
-    let dbImg = r.img || r.image || r.p;
+    let dbImg = r.img || r.image || (typeof r.p === 'string' && r.p.startsWith('http') ? r.p : null);
     let r2Img = details ? (details.p || details.img || details.image) : null;
     
     const isValid = (url) => url && url.length > 10 && (url.startsWith('http') || url.startsWith('https'));
@@ -518,19 +527,25 @@ function _formatRecipe(r, details = null) {
     }
 
     const id = r.i || r.id || r.uid || (r._id ? r._id.toString() : '');
+    const chunk = r.h !== undefined ? r.h : (r.chunk !== undefined ? r.chunk : null);
+    const part = r.p !== undefined && typeof r.p === 'number' ? r.p : chunk;
+
     return {
         i: id,
         t: r.t || r.title || r.name || 'Untitled Recipe',
         c: r.c || r.category || r.main_category || 'General',
         s: r.s || r.subcategory || r.sub_category || '',
-        h: r.h !== undefined ? r.h : (r.chunk !== undefined ? r.chunk : null),
+        h: chunk,
+        p: part, // Preserve numeric part index if it exists
+        o: r.o,
+        l: r.l,
         r: r.r || r.rating || 0,
-        p: img,
-        // Detailed data: check all possible field names from both R2 chunk (details) and MongoDB (r)
+        img: img,
+        // Detailed data
         m: (details && (details.m || details.ingredients)) || r.m || r.ingredients || r.malzemeler || r.icindekiler || [],
         y: (details && (details.y || details.steps || details.instructions)) || r.y || r.steps || r.instructions || r.yapilis || [],
         g: r.g || r.nb_servings || r.servings || '',
-        l: r.l || r.prep_time || r.total_time || '',
+        l_time: r.l || r.prep_time || r.total_time || '',
         // Legacy support
         id: id,
         title: r.t || r.title || r.name || 'Untitled Recipe',
@@ -594,11 +609,17 @@ app.get('/recipes/:id(*)', async (req, res) => {
         const base = _formatRecipe(recipe);
 
         if (recipe.h !== undefined && recipe.h !== null) {
-            console.log(`📡 Attempting hydration from chunk ${recipe.h} for ${recipe.i}`);
-            const details = await getRecipeFromChunk(recipe.h, recipe.i || recipe._id, recipe.t || recipe.title);
+            console.log(`📡 Attempting hydration for ${recipe.i || recipe._id} (h: ${recipe.h}, o: ${recipe.o}, l: ${recipe.l})`);
+            const details = await getRecipeFromChunk(
+                recipe.h, 
+                recipe.i || recipe._id, 
+                recipe.t || recipe.title,
+                (recipe.o !== undefined && recipe.o !== null) ? parseInt(recipe.o) : null,
+                (recipe.l !== undefined && recipe.l !== null) ? parseInt(recipe.l) : null
+            );
             
             if (details) {
-                console.log(`✨ Successfully hydrated from R2! m_count: ${details.m ? details.m.length : 0}, y_count: ${details.y ? details.y.length : 0}`);
+                console.log(`✨ Successfully hydrated from R2! m_count: ${details.m ? details.m.length : (details.ingredients ? details.ingredients.length : 0)}`);
                 return res.json(_formatRecipe(recipe, details));
             } else {
                 console.warn(`⚠️ Hydration failed for ${recipe.i || recipe._id}, sending basic info`);
