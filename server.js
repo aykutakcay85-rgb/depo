@@ -143,13 +143,29 @@ async function getRecipeFromChunk(chunkId, recipeId, title = '') {
             return null;
         }
 
-        const chunkData = JSON.parse(data);
+        let chunkData;
+        try {
+            const parsed = JSON.parse(data);
+            chunkData = Array.isArray(parsed) ? parsed : [parsed];
+        } catch (jsonErr) {
+            // Try parsing as JSONL (one JSON object per line)
+            try {
+                chunkData = data.trim().split('\n').map(line => JSON.parse(line));
+                console.log(`✅ Chunk loaded as JSONL: ${key} (${chunkData.length} recipes)`);
+            } catch (jsonlErr) {
+                console.error(`❌ Parse Error for ${key}: ${jsonErr.message} / ${jsonlErr.message}`);
+                return null;
+            }
+        }
+
         const found = chunkData.find(r => {
-            const rid = (r.i || r.id || r.uid || '').toString();
+            const rid = (r.i || r.id || r.uid || r.url || '').toString();
             const tid = recipeId.toString();
             if (rid && rid === tid) return true;
-            if (title && (chunkId === 'gastro' || chunkId === 'chef')) {
-                const rTitle = (r.t || r.title || '').toString().toLowerCase().trim();
+            
+            // Match by title as a fallback for ALL categories if ID fails
+            if (title) {
+                const rTitle = (r.t || r.title || r.name || '').toString().toLowerCase().trim();
                 const targetTitle = title.toLowerCase().trim();
                 return rTitle === targetTitle;
             }
@@ -516,9 +532,9 @@ function _formatRecipe(r, details = null) {
         l: r.l,
         r: r.r || r.rating || 0,
         img: img,
-        // Detailed data
-        m: (details && (details.m || details.ingredients)) || r.m || r.ingredients || r.malzemeler || r.icindekiler || [],
-        y: (details && (details.y || details.steps || details.instructions)) || r.y || r.steps || r.instructions || r.yapilis || [],
+        // Detailed data: check all possible field names from both R2 chunk (details) and MongoDB (r)
+        m: (details && (details.m || details.ingredients || details.malzemeler || details.icindekiler || details.components)) || r.m || r.ingredients || r.malzemeler || r.icindekiler || [],
+        y: (details && (details.y || details.steps || details.instructions || details.yapilis || details.hazirlanisi || details.cooking_steps)) || r.y || r.steps || r.instructions || r.yapilis || [],
         g: r.g || r.nb_servings || r.servings || '',
         l_time: r.l || r.prep_time || r.total_time || '',
         // Legacy support
