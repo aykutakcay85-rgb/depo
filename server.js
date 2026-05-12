@@ -124,26 +124,14 @@ function getCategoryQuery(category) {
     }
 }
 
-async function getRecipeFromChunk(chunkId, recipeId, title = '', offset = null, length = null) {
+async function getRecipeFromChunk(chunkId, recipeId, title = '') {
     try {
-        let key;
-        let range = undefined;
-
-        if (offset !== null && length !== null) {
-            // New Pattern: Partial fetch from recipes.txt.partX
-            key = `recipes.txt.part${chunkId}`;
-            range = `bytes=${offset}-${offset + length - 1}`;
-            console.log(`📡 R2 PARTIAL FETCH: Key=${key}, Range=${range}`);
-        } else {
-            // Old Pattern: Full JSON chunk
-            key = `chunk_${chunkId}.json`;
-            console.log(`📡 R2 FULL FETCH: Key=${key}`);
-        }
+        const key = `chunk_${chunkId}.json`;
+        console.log(`📡 R2 FETCH: Key=${key}, Recipe=${recipeId}`);
 
         const command = new GetObjectCommand({
             Bucket: BUCKET_NAME,
             Key: key,
-            Range: range
         });
 
         let data;
@@ -155,19 +143,6 @@ async function getRecipeFromChunk(chunkId, recipeId, title = '', offset = null, 
             return null;
         }
 
-        if (range) {
-            // Partial text parts contain a single JSON object per recipe
-            try {
-                const recipe = JSON.parse(data);
-                console.log(`✨ R2 MATCH FOUND via Partial Get for ${recipeId}`);
-                return recipe;
-            } catch (pErr) {
-                console.error(`❌ Partial JSON Parse Error: ${pErr.message}`);
-                return null;
-            }
-        }
-
-        // Handle full JSON chunks
         const chunkData = JSON.parse(data);
         const found = chunkData.find(r => {
             const rid = (r.i || r.id || r.uid || '').toString();
@@ -609,17 +584,15 @@ app.get('/recipes/:id(*)', async (req, res) => {
         const base = _formatRecipe(recipe);
 
         if (recipe.h !== undefined && recipe.h !== null) {
-            console.log(`📡 Attempting hydration for ${recipe.i || recipe._id} (h: ${recipe.h}, o: ${recipe.o}, l: ${recipe.l})`);
+            console.log(`📡 Attempting hydration for ${recipe.i || recipe._id} (h: ${recipe.h})`);
             const details = await getRecipeFromChunk(
                 recipe.h, 
                 recipe.i || recipe._id, 
-                recipe.t || recipe.title,
-                (recipe.o !== undefined && recipe.o !== null) ? parseInt(recipe.o) : null,
-                (recipe.l !== undefined && recipe.l !== null) ? parseInt(recipe.l) : null
+                recipe.t || recipe.title
             );
             
             if (details) {
-                console.log(`✨ Successfully hydrated from R2! m_count: ${details.m ? details.m.length : (details.ingredients ? details.ingredients.length : 0)}`);
+                console.log(`✨ Successfully hydrated from R2!`);
                 return res.json(_formatRecipe(recipe, details));
             } else {
                 console.warn(`⚠️ Hydration failed for ${recipe.i || recipe._id}, sending basic info`);
