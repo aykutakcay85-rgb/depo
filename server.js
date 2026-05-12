@@ -127,33 +127,57 @@ function getCategoryQuery(category) {
 async function getRecipeFromChunk(chunkId, recipeId, title = '') {
     try {
         const key = `chunk_${chunkId}.json`;
-        console.log(`📡 R2 FETCH: Key=${key}, Recipe=${recipeId}`);
-
-        const command = new GetObjectCommand({
-            Bucket: BUCKET_NAME,
-            Key: key,
-        });
-
+        const possibleKeys = [key, `foodi/${key}`, `chunks/${key}`];
+        
         let data;
-        try {
-            const response = await s3Client.send(command);
-            data = await response.Body.transformToString();
-        } catch (r2err) {
-            console.warn(`⚠️ R2 Fetch failed for ${key}, error: ${r2err.message}`);
+        let successKey = '';
+
+        for (const k of possibleKeys) {
+            try {
+                console.log(`📡 R2 FETCH: Key=${k}, Recipe=${recipeId}`);
+                const command = new GetObjectCommand({ Bucket: BUCKET_NAME, Key: k });
+                const response = await s3Client.send(command);
+                data = await response.Body.transformToString();
+                successKey = k;
+                break;
+            } catch (r2err) {
+                // Try next key
+            }
+        }
+
+        if (!data) {
+            // Local Fallback
+            for (const k of possibleKeys) {
+                try {
+                    const fs = require('fs');
+                    const path = require('path');
+                    const localPath = path.join(__dirname, k.includes('/') ? k.split('/').pop() : k);
+                    if (fs.existsSync(localPath)) {
+                        data = fs.readFileSync(localPath, 'utf8');
+                        successKey = `LOCAL:${localPath}`;
+                        break;
+                    }
+                } catch (e) {}
+            }
+        }
+
+        if (!data) {
+            console.warn(`❌ R2/LOCAL Fetch failed for chunk ${chunkId}`);
             return null;
         }
 
+        console.log(`✅ Chunk loaded from ${successKey}`);
+        
         let chunkData;
         try {
             const parsed = JSON.parse(data);
             chunkData = Array.isArray(parsed) ? parsed : [parsed];
         } catch (jsonErr) {
-            // Try parsing as JSONL (one JSON object per line)
+            // JSONL Fallback
             try {
                 chunkData = data.trim().split('\n').map(line => JSON.parse(line));
-                console.log(`✅ Chunk loaded as JSONL: ${key} (${chunkData.length} recipes)`);
             } catch (jsonlErr) {
-                console.error(`❌ Parse Error for ${key}: ${jsonErr.message} / ${jsonlErr.message}`);
+                console.error(`❌ Parse Error for ${successKey}`);
                 return null;
             }
         }
@@ -505,16 +529,16 @@ function _formatRecipe(r, details = null) {
     let dbImg = r.img || r.image || (typeof r.p === 'string' && r.p.startsWith('http') ? r.p : null);
     let r2Img = details ? (details.p || details.img || details.image) : null;
     
-    const isValid = (url) => url && url.length > 10 && (url.startsWith('http') || url.startsWith('https'));
+    const isValid = (url) => url && url.length > 10 && (url.startsWith('http') || url.startsWith('https')) && !url.includes('unsplash.com') && !url.includes('placeholder');
 
-    let img;
+    let img = '';
     if (isValid(dbImg)) {
         img = dbImg;
     } else if (isValid(r2Img)) {
         img = r2Img;
     } else {
-        const key = Object.keys(fallbackImages).find(k => cat.includes(k)) || 'default';
-        img = fallbackImages[key];
+        // Explicitly removing stock fallback as requested: "stock kaldır yoka olmayacak"
+        img = '';
     }
 
     const id = r.i || r.id || r.uid || (r._id ? r._id.toString() : '');
