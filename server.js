@@ -535,22 +535,44 @@ function _formatRecipe(r, details = null) {
     };
 
     // Logic: Try DB first, then R2 details
-    // IMPORTANT: In this DB, 'p' often stores the image URL if it's a string.
-    let dbImg = r.img || r.image || r.image_url || r.imageUrl || r.resim || r.photo || r.pic || (typeof r.p === 'string' && r.p.startsWith('http') ? r.p : null);
+    const tryKeys = ['img', 'image', 'imageUrl', 'image_url', 'resim', 'photo', 'pic', 'gorsel', 'resim_url', 'photo_url'];
     
-    // Detailed R2 data search for image
+    let dbImg = null;
+    for (const key of tryKeys) {
+        if (r[key] && typeof r[key] === 'string' && r[key].length > 5) {
+            dbImg = r[key];
+            break;
+        }
+    }
+    if (!dbImg && typeof r.p === 'string' && r.p.startsWith('http')) dbImg = r.p;
+    
     let r2Img = null;
     if (details) {
-        r2Img = details.p || details.img || details.image || details.image_url || details.imageUrl || details.resim || details.photo || details.pic || details.gorsel || details.resim_url;
+        for (const key of tryKeys) {
+            if (details[key] && typeof details[key] === 'string' && details[key].length > 5) {
+                r2Img = details[key];
+                break;
+            }
+        }
+        if (!r2Img && typeof details.p === 'string' && details.p.startsWith('http')) r2Img = details.p;
     }
     
-    const isValid = (url) => url && url.length > 5 && (url.toString().startsWith('http') || url.toString().startsWith('https') || url.toString().startsWith('assets/'));
+    const isValid = (url) => url && typeof url === 'string' && url.length > 5 && (url.startsWith('http') || url.startsWith('https') || url.startsWith('assets/'));
 
     let img = '';
-    if (isValid(dbImg)) {
+    if (isValid(r2Img)) {
+        img = r2Img; // R2 details (hydration) takes priority for Gastro/Chef
+    } else if (isValid(dbImg)) {
         img = dbImg;
-    } else if (isValid(r2Img)) {
-        img = r2Img;
+    }
+
+    if (!img) {
+        // Final Fallback: Construct R2 Image URL based on ID
+        const r2BaseUrl = "https://pub-088807d92556487e97d1ec1df970bc86.r2.dev";
+        img = `${r2BaseUrl}/images/${id}.webp`;
+        console.log(`🔗 CONSTRUCTED_R2_IMAGE for recipe: ${r.t || r.name} -> ${img}`);
+    } else {
+        console.log(`✅ IMAGE_FOUND for recipe: ${r.t || r.name} -> ${img.substring(0, 30)}...`);
     }
 
     const id = r.i || r.id || r.uid || (r._id ? r._id.toString() : '');
