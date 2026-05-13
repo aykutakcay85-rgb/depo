@@ -535,24 +535,24 @@ function _formatRecipe(r, details = null) {
     };
 
     // Logic: Try DB first, then R2 details
-    let dbImg = r.img || r.image || (typeof r.p === 'string' && r.p.startsWith('http') ? r.p : null);
-    let r2Img = details ? (details.p || details.img || details.image) : null;
+    // IMPORTANT: In this DB, 'p' often stores the image URL if it's a string.
+    let dbImg = r.img || r.image || r.image_url || r.imageUrl || (typeof r.p === 'string' && r.p.startsWith('http') ? r.p : null);
+    let r2Img = details ? (details.p || details.img || details.image || details.image_url || details.imageUrl) : null;
     
-    const isValid = (url) => url && url.length > 10 && (url.startsWith('http') || url.startsWith('https')) && !url.includes('unsplash.com') && !url.includes('placeholder');
+    const isValid = (url) => url && url.length > 10 && (url.startsWith('http') || url.startsWith('https')) && !url.includes('placeholder');
 
     let img = '';
     if (isValid(dbImg)) {
         img = dbImg;
     } else if (isValid(r2Img)) {
         img = r2Img;
-    } else {
-        // No valid image found, return empty so the app can decide what to do
-        img = '';
     }
 
     const id = r.i || r.id || r.uid || (r._id ? r._id.toString() : '');
     const chunk = r.h !== undefined ? r.h : (r.chunk !== undefined ? r.chunk : null);
-    const part = r.p !== undefined && typeof r.p === 'number' ? r.p : chunk;
+    
+    // If r.p is a URL, don't overwrite it with chunk ID here; use a separate part variable
+    const part = (typeof r.p === 'number') ? r.p : chunk;
 
     return {
         i: id,
@@ -560,12 +560,15 @@ function _formatRecipe(r, details = null) {
         c: r.c || r.category || r.main_category || 'General',
         s: r.s || r.subcategory || r.sub_category || '',
         h: chunk,
-        p: part, // Preserve numeric part index if it exists
+        p: part, 
         o: r.o,
         l: r.l,
         r: r.r || r.rating || 0,
         img: img,
-        // Detailed data: check all possible field names from both R2 chunk (details) and MongoDB (r)
+        image: img,
+        imageUrl: img,
+        image_url: img,
+        // Detailed data
         m: (details && (details.m || details.ingredients || details.malzemeler || details.icindekiler || details.components)) || r.m || r.ingredients || r.malzemeler || r.icindekiler || [],
         y: (details && (details.y || details.steps || details.instructions || details.yapilis || details.hazirlanisi || details.cooking_steps)) || r.y || r.steps || r.instructions || r.yapilis || [],
         g: r.g || r.nb_servings || r.servings || '',
@@ -573,8 +576,7 @@ function _formatRecipe(r, details = null) {
         // Legacy support
         id: id,
         title: r.t || r.title || r.name || 'Untitled Recipe',
-        category: r.c || r.category || r.main_category || 'General',
-        image: img
+        category: r.c || r.category || r.main_category || 'General'
     };
 }
 
