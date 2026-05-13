@@ -124,6 +124,15 @@ function getCategoryQuery(category) {
     }
 }
 
+function normalizeTitle(str) {
+    if (!str) return "";
+    return str.toLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "") // Remove accents
+        .replace(/[^a-z0-9]/g, "")      // Remove special chars
+        .trim();
+}
+
 async function getRecipeFromChunk(chunkId, recipeId, title = '') {
     try {
         const key = `chunk_${chunkId}.json`;
@@ -189,9 +198,9 @@ async function getRecipeFromChunk(chunkId, recipeId, title = '') {
             
             // Match by title as a fallback for ALL categories if ID fails
             if (title) {
-                const rTitle = (r.t || r.title || r.name || '').toString().toLowerCase().trim();
-                const targetTitle = title.toLowerCase().trim();
-                return rTitle === targetTitle;
+                const rTitleNorm = normalizeTitle(r.t || r.title || r.name || '');
+                const targetTitleNorm = normalizeTitle(title);
+                return rTitleNorm === targetTitleNorm;
             }
             return false;
         });
@@ -537,7 +546,7 @@ function _formatRecipe(r, details = null) {
     } else if (isValid(r2Img)) {
         img = r2Img;
     } else {
-        // Explicitly removing stock fallback as requested: "stock kaldır yoka olmayacak"
+        // No valid image found, return empty so the app can decide what to do
         img = '';
     }
 
@@ -625,11 +634,21 @@ app.get('/recipes/:id(*)', async (req, res) => {
 
         if (recipe.h !== undefined && recipe.h !== null) {
             console.log(`📡 Attempting hydration for ${recipe.i || recipe._id} (h: ${recipe.h})`);
-            const details = await getRecipeFromChunk(
+            let details = await getRecipeFromChunk(
                 recipe.h, 
                 recipe.i || recipe._id, 
                 recipe.t || recipe.title
             );
+            
+            // 🔄 FALLBACK: If primary chunk fails, try Chef and Gastro
+            if (!details && recipe.h !== 'chef' && recipe.h !== 'gastro') {
+                console.log(`🔍 Fallback: Trying 'chef' chunk...`);
+                details = await getRecipeFromChunk('chef', recipe.i || recipe._id, recipe.t || recipe.title);
+                if (!details) {
+                    console.log(`🔍 Fallback: Trying 'gastro' chunk...`);
+                    details = await getRecipeFromChunk('gastro', recipe.i || recipe._id, recipe.t || recipe.title);
+                }
+            }
             
             if (details) {
                 console.log(`✨ Successfully hydrated from R2!`);
@@ -643,6 +662,35 @@ app.get('/recipes/:id(*)', async (req, res) => {
         return res.json(_formatRecipe(recipe));
     } catch (err) {
         console.error(`🔥 Server Error:`, err.message);
+        res.status(500).json({ error: "Internal Server Error" });
+    }
+});
+
+app.patch('/recipes/:id/image', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { image } = req.body;
+
+        if (!image || !image.startsWith('http')) {
+            return res.status(400).json({ error: "Valid image URL required" });
+        }
+
+        const db = mongoClient.db("foodi");
+        const collection = db.collection("chefaykut");
+
+        const result = await collection.updateOne(
+            { i: id },
+            { $set: { img: image, image: image, p: image } }
+        );
+
+        if (result.matchedCount === 0) {
+            return res.status(404).json({ error: "Recipe not found" });
+        }
+
+        console.log(`✅ Image updated for recipe ${id}`);
+        res.json({ success: true, message: "Image updated successfully" });
+    } catch (err) {
+        console.error(`❌ Error updating image:`, err.message);
         res.status(500).json({ error: "Internal Server Error" });
     }
 });
