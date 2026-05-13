@@ -536,10 +536,15 @@ function _formatRecipe(r, details = null) {
 
     // Logic: Try DB first, then R2 details
     // IMPORTANT: In this DB, 'p' often stores the image URL if it's a string.
-    let dbImg = r.img || r.image || r.image_url || r.imageUrl || (typeof r.p === 'string' && r.p.startsWith('http') ? r.p : null);
-    let r2Img = details ? (details.p || details.img || details.image || details.image_url || details.imageUrl) : null;
+    let dbImg = r.img || r.image || r.image_url || r.imageUrl || r.resim || r.photo || r.pic || (typeof r.p === 'string' && r.p.startsWith('http') ? r.p : null);
     
-    const isValid = (url) => url && url.length > 10 && (url.startsWith('http') || url.startsWith('https')) && !url.includes('placeholder');
+    // Detailed R2 data search for image
+    let r2Img = null;
+    if (details) {
+        r2Img = details.p || details.img || details.image || details.image_url || details.imageUrl || details.resim || details.photo || details.pic || details.gorsel || details.resim_url;
+    }
+    
+    const isValid = (url) => url && url.length > 5 && (url.toString().startsWith('http') || url.toString().startsWith('https') || url.toString().startsWith('assets/'));
 
     let img = '';
     if (isValid(dbImg)) {
