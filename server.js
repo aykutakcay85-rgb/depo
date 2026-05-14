@@ -13,13 +13,13 @@ const app = express();
 app.use(helmet());
 
 // SECURITY: Rate Limiting
-const limiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 1000, // Limit each IP to 1000 requests per windowMs
-    message: { error: "Too many requests from this IP, please try again later." },
-    standardHeaders: true,
-    legacyHeaders: false,
-});
+// const limiter = rateLimit({
+//     windowMs: 15 * 60 * 1000, // 15 minutes
+//     max: 1000, // Limit each IP to 1000 requests per windowMs
+//     message: { error: "Too many requests from this IP, please try again later." },
+//     standardHeaders: true,
+//     legacyHeaders: false,
+// });
 // app.use(limiter); // User requested infinite requests, so rate limiter is disabled
 
 // SECURITY: CORS Configuration
@@ -137,6 +137,9 @@ function normalizeTitle(str) {
         .trim();
 }
 
+const chunkCache = new Map();
+const CACHE_TTL = 10 * 60 * 1000; // 10 minutes
+
 async function getRecipeFromChunk(chunkId, recipeId, title = '') {
     try {
         const key = `chunk_${chunkId}.json`;
@@ -145,16 +148,27 @@ async function getRecipeFromChunk(chunkId, recipeId, title = '') {
         let data;
         let successKey = '';
 
-        for (const k of possibleKeys) {
-            try {
-                console.log(`📡 R2 FETCH: Key=${k}, Recipe=${recipeId}`);
-                const command = new GetObjectCommand({ Bucket: BUCKET_NAME, Key: k });
-                const response = await s3Client.send(command);
-                data = await response.Body.transformToString();
-                successKey = k;
-                break;
-            } catch (r2err) {
-                // Try next key
+        // Check cache first
+        const cacheKey = `chunk_${chunkId}`;
+        const cached = chunkCache.get(cacheKey);
+        if (cached && (Date.now() - cached.timestamp < CACHE_TTL)) {
+            console.log(`⚡ Chunk ${chunkId} loaded from CACHE`);
+            data = cached.data;
+        } else {
+            for (const k of possibleKeys) {
+                try {
+                    const command = new GetObjectCommand({ Bucket: BUCKET_NAME, Key: k });
+                    const response = await s3Client.send(command);
+                    data = await response.Body.transformToString();
+                    if (data) {
+                        successKey = k;
+                        // Store in cache
+                        chunkCache.set(cacheKey, { data, timestamp: Date.now() });
+                        break;
+                    }
+                } catch (r2err) {
+                    // Try next key
+                }
             }
         }
 
