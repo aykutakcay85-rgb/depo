@@ -106,18 +106,28 @@ function getCategoryQuery(category) {
     if (cat === 'chef_pro' || cat === 'chef' || cat.includes('chef')) {
         return { c: { $regex: '^chef_pro$', $options: 'i' } };
     }
-    if (cat === 'main') {
-        return { c: { $regex: 'Main Dishes|Et Yemekleri|Tavuk Yemekleri|Balık Yemekleri|Kebap|Köfte|Sebze Yemekleri|Dolma-Sarma|Bakliyat|Pilav|Makarna', $options: 'i' } };
-    } else if (cat === 'appetizer') {
-        return { c: { $regex: 'Appetizer', $options: 'i' } };
-    } else if (cat === 'breakfast') {
-        return { c: { $regex: 'Breakfast', $options: 'i' } };
-    } else if (cat === 'sauce') {
-        return { c: { $regex: 'Sauce|Sos', $options: 'i' } };
-    } else if (cat === 'beverage') {
-        return { c: { $regex: 'Beverage|İçecek', $options: 'i' } };
-    } else if (cat === 'preserve') {
-        return { c: { $regex: 'Preserve|Reçel|Konserve|Kış Hazırlıkları', $options: 'i' } };
+    if (cat === 'main' || cat === 'main course' || cat === 'ana yemek') {
+        return { c: { $regex: 'Main Dishes|Et Yemekleri|Tavuk Yemekleri|Balık Yemekleri|Kebap|Köfte|Sebze Yemekleri|Dolma-Sarma|Bakliyat|Pilav|Makarna|Ana Yemek', $options: 'i' } };
+    } else if (cat === 'appetizer' || cat === 'meze' || cat === 'baslangic') {
+        return { c: { $regex: 'Appetizer|Meze|Başlangıçlar|Ara Sıcak|Zeytinyağlılar', $options: 'i' } };
+    } else if (cat === 'breakfast' || cat === 'kahvalti') {
+        return { c: { $regex: 'Breakfast|Kahvaltı|Kahvaltılık', $options: 'i' } };
+    } else if (cat === 'soup' || cat === 'corba') {
+        return { c: { $regex: 'Soup|Çorba|Çorbalar', $options: 'i' } };
+    } else if (cat === 'dessert' || cat === 'tatli') {
+        return { c: { $regex: 'Dessert|Tatlı|Tatlılar|Pastalar|Kurabiyeler', $options: 'i' } };
+    } else if (cat === 'salad' || cat === 'salata') {
+        return { c: { $regex: 'Salad|Salata|Salatalar', $options: 'i' } };
+    } else if (cat === 'bread' || cat === 'bakery' || cat === 'hamur') {
+        return { c: { $regex: 'Bread|Bakery|Ekmek|Hamur İşi|Börek|Poğaça|Pizzalar', $options: 'i' } };
+    } else if (cat === 'sauce' || cat === 'sos') {
+        return { c: { $regex: 'Sauce|Sos|Soslar', $options: 'i' } };
+    } else if (cat === 'beverage' || cat === 'icecek') {
+        return { c: { $regex: 'Beverage|İçecek|İçecekler|Kokteyller', $options: 'i' } };
+    } else if (cat === 'preserve' || cat === 'konserve' || cat === 'recel') {
+        return { c: { $regex: 'Preserve|Reçel|Konserve|Kış Hazırlıkları|Turşular', $options: 'i' } };
+    } else if (cat === 'other' || cat === 'diger') {
+        return { c: { $regex: 'Other|Diğer', $options: 'i' } };
     } else {
         const safeCategory = category.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         return { c: { $regex: '^' + safeCategory + '$', $options: 'i' } };
@@ -354,6 +364,35 @@ app.get('/recipes/counts', async (req, res) => {
         res.json(result);
     } catch (err) {
         console.error(`❌ Error in /recipes/counts:`, err.message);
+        res.status(500).json({ error: "Internal Server Error" });
+    }
+});
+
+app.get('/home/previews', async (req, res) => {
+    try {
+        const db = mongoClient.db("foodi");
+        const collection = db.collection("chefaykut");
+        
+        const categories = [
+            'gastro', 'main', 'soup', 'sauce', 'salad', 'appetizer', 
+            'dessert', 'bread', 'breakfast', 'preserve', 'beverage', 'other'
+        ];
+
+        const results = {};
+        
+        // Parallel fetch for 1 sample recipe per category
+        const promises = categories.map(async (cat) => {
+            const query = getCategoryQuery(cat);
+            const recipe = await collection.findOne(query, { sort: { r: -1 } });
+            if (recipe) {
+                results[cat] = _formatRecipe(recipe);
+            }
+        });
+
+        await Promise.all(promises);
+        res.json(results);
+    } catch (err) {
+        console.error(`❌ Error in /home/previews:`, err.message);
         res.status(500).json({ error: "Internal Server Error" });
     }
 });
