@@ -129,7 +129,11 @@ function normalizeTitle(str) {
     return str.toLowerCase()
         .normalize("NFD")
         .replace(/[\u0300-\u036f]/g, "") // Remove accents
-        .replace(/[^a-z0-9]/g, "")      // Remove special chars
+        .replace(/[^a-z0-9]/g, " ")      // Replace special chars with space
+        .replace(/\s+/g, "")            // Remove all spaces
+        .replace(/\band\b/g, "")        // Remove common words that vary
+        .replace(/\bve\b/g, "")
+        .replace(/\bwith\b/g, "")
         .trim();
 }
 
@@ -171,11 +175,11 @@ async function getRecipeFromChunk(chunkId, recipeId, title = '') {
         }
 
         if (!data) {
-            console.warn(`❌ R2/LOCAL Fetch failed for chunk ${chunkId}`);
+            console.warn(`❌ R2/LOCAL Fetch failed for chunk ${chunkId}. Tried: ${possibleKeys.join(', ')}`);
             return null;
         }
 
-        console.log(`✅ Chunk loaded from ${successKey}`);
+        console.log(`✅ Chunk ${chunkId} loaded successfully (${data.length} bytes)`);
         
         let chunkData;
         try {
@@ -205,6 +209,9 @@ async function getRecipeFromChunk(chunkId, recipeId, title = '') {
             return false;
         });
 
+        if (!found) {
+            console.warn(`⚠️ Recipe ${recipeId} not found in chunk ${chunkId} by ID or Title (${title})`);
+        }
         return found || null;
     } catch (err) {
         console.error(`🔥 getRecipeFromChunk Error:`, err.message);
@@ -559,6 +566,8 @@ function _formatRecipe(r, details = null) {
     
     const isValid = (url) => url && typeof url === 'string' && url.length > 5 && (url.startsWith('http') || url.startsWith('https') || url.startsWith('assets/'));
 
+    const id = r.i || r.id || r.uid || (r._id ? r._id.toString() : '');
+
     let img = '';
     if (isValid(r2Img)) {
         img = r2Img; // R2 details (hydration) takes priority for Gastro/Chef
@@ -575,7 +584,6 @@ function _formatRecipe(r, details = null) {
         console.log(`✅ IMAGE_FOUND for recipe: ${r.t || r.name} -> ${img.substring(0, 30)}...`);
     }
 
-    const id = r.i || r.id || r.uid || (r._id ? r._id.toString() : '');
     const chunk = r.h !== undefined ? r.h : (r.chunk !== undefined ? r.chunk : null);
     
     // If r.p is a URL, don't overwrite it with chunk ID here; use a separate part variable
@@ -658,17 +666,35 @@ app.get('/recipes/:id(*)', async (req, res) => {
 
         console.log(`✅ Found in Mongo: ${recipe.t} (ID: ${recipe.i}, h: ${recipe.h}, _id: ${recipe._id})`);
 
-        // Always format base data
-        const base = _formatRecipe(recipe);
+        // HYDRATION LOGIC: Merge data from external chunks (Chef/Gastro datasets)
+        let details = null;
+        let effectiveH = recipe.h;
 
-        if (recipe.h !== undefined && recipe.h !== null) {
-            console.log(`📡 Attempting hydration for ${recipe.i || recipe._id} (h: ${recipe.h})`);
-            let details = await getRecipeFromChunk(
-                recipe.h, 
+        // Force hydration for specific categories if 'h' is missing
+        if (!effectiveH) {
+            const category = (recipe.c || recipe.category || '').toLowerCase();
+            if (category.includes('gastro') || category.includes('legacy_sauce')) {
+                effectiveH = 'gastro';
+            } else if (category.includes('chef') || category.includes('pro')) {
+                effectiveH = 'chef';
+            }
+        }
+
+        if (effectiveH !== undefined && effectiveH !== null) {
+            console.log(`📡 Attempting hydration for ${recipe.i || recipe._id} (h: ${effectiveH})`);
+            details = await getRecipeFromChunk(
+                effectiveH, 
                 recipe.i || recipe._id, 
-                recipe.t || recipe.title
+                recipe.t || recipe.title || recipe.name
             );
             
+            if (details) {
+                console.log(`✅ Hydration SUCCESS for ${recipe.i || recipe._id} from chunk ${effectiveH}`);
+            } else {
+                console.warn(`⚠️ Hydration FAILED for ${recipe.i || recipe._id} from chunk ${effectiveH}`);
+            }
+        }
+    
             // 🔄 FALLBACK: If primary chunk fails, try Chef and Gastro
             if (!details && recipe.h !== 'chef' && recipe.h !== 'gastro') {
                 console.log(`🔍 Fallback: Trying 'chef' chunk...`);
@@ -679,16 +705,13 @@ app.get('/recipes/:id(*)', async (req, res) => {
                 }
             }
             
-            if (details) {
-                console.log(`✨ Successfully hydrated from R2!`);
-                return res.json(_formatRecipe(recipe, details));
-            } else {
-                console.warn(`⚠️ Hydration failed for ${recipe.i || recipe._id}, sending basic info`);
-                return res.json(_formatRecipe(recipe));
-            }
+        if (details) {
+            console.log(`✨ Successfully hydrated from R2!`);
+            return res.json(_formatRecipe(recipe, details));
+        } else {
+            console.warn(`⚠️ Hydration failed for ${recipe.i || recipe._id}, sending basic info`);
+            return res.json(_formatRecipe(recipe));
         }
-
-        return res.json(_formatRecipe(recipe));
     } catch (err) {
         console.error(`🔥 Server Error:`, err.message);
         res.status(500).json({ error: "Internal Server Error" });
