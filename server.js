@@ -617,7 +617,14 @@ function _formatRecipe(r, details = null) {
         if (!r2Img && typeof details.p === 'string' && details.p.startsWith('http')) r2Img = details.p;
     }
     
-    const isValid = (url) => url && typeof url === 'string' && url.length > 5 && (url.startsWith('http') || url.startsWith('https') || url.startsWith('assets/'));
+    const isValid = (url) => {
+        if (!url || typeof url !== 'string' || url.length < 10) return false;
+        if (!url.startsWith('http')) return false;
+        // Known domains that block hotlinking or are unreliable
+        const forbiddenDomains = ['food.fnr.sndimg.com', 'sndimg.com', 'placeholder.com'];
+        if (forbiddenDomains.some(domain => url.includes(domain))) return false;
+        return true;
+    };
 
     const id = r.i || r.id || r.uid || (r._id ? r._id.toString() : '');
 
