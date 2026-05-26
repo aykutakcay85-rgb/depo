@@ -86,8 +86,10 @@ const s3Client = new S3Client({
 
 function authenticate(req, res, next) {
     const apiKey = req.headers['x-api-key'];
-    // Allow public access to ping
-    if (req.path === '/ping') return next();
+    // Allow public access to ping and images
+    if (req.path === '/ping' || req.path.startsWith('/gastro_images/') || req.path.startsWith('/images/')) {
+        return next();
+    }
     
     if (apiKey && apiKey === APP_API_KEY) {
         next();
@@ -145,6 +147,38 @@ function normalizeTitle(str) {
         .replace(/\bve\b/g, "")
         .replace(/\bwith\b/g, "")
         .trim();
+}
+
+function _resolveImageUrl(url, category = '') {
+    if (!url || typeof url !== 'string' || url === 'null') return '';
+    
+    const baseUrl = url.split('?v=')[0].trim();
+    const proxyBaseUrl = "https://chef-aykut-backend.onrender.com";
+    
+    // Check if it belongs to old R2 buckets or Cloudflare Worker
+    if (baseUrl.includes('pub-088807d92556487e97d1ec1df970bc86')) {
+        const path = baseUrl.replace(/^https?:\/\/pub-088807d92556487e97d1ec1df970bc86\.r2\.dev/, '');
+        return `${proxyBaseUrl}${path}?v=3`;
+    }
+    if (baseUrl.includes('pub-f31f36f3d95441bf8e622e620b1cda67')) {
+        const path = baseUrl.replace(/^https?:\/\/pub-f31f36f3d95441bf8e622e620b1cda67\.r2\.dev/, '');
+        return `${proxyBaseUrl}${path}?v=3`;
+    }
+    if (baseUrl.includes('yemek-resimler.aykutakcay85.workers.dev')) {
+        const path = baseUrl.replace(/^https?:\/\/yemek-resimler\.aykutakcay85\.workers\.dev/, '');
+        return `${proxyBaseUrl}${path}?v=3`;
+    }
+    
+    // Relative filename (no protocol, no assets/)
+    if (baseUrl && !baseUrl.startsWith('http') && !baseUrl.startsWith('assets/')) {
+        if (category && category.toLowerCase().includes('gastro')) {
+            return `${proxyBaseUrl}/gastro_images/${baseUrl}?v=3`;
+        } else {
+            return `${proxyBaseUrl}/images/${baseUrl}?v=3`;
+        }
+    }
+    
+    return url;
 }
 
 const chunkCache = new Map();
@@ -374,7 +408,7 @@ app.get('/home/previews', async (req, res) => {
         const collection = db.collection("chefaykut");
         
         const categories = [
-            'gastro', 'main', 'soup', 'sauce', 'salad', 'appetizer', 
+            'gastro', 'chef', 'main', 'soup', 'sauce', 'salad', 'appetizer', 
             'dessert', 'bread', 'breakfast', 'preserve', 'beverage', 'other'
         ];
 
@@ -636,12 +670,12 @@ function _formatRecipe(r, details = null) {
     }
 
     if (!img) {
-        // Final Fallback: Construct R2 Image URL based on ID
-        const r2BaseUrl = "https://pub-088807d92556487e97d1ec1df970bc86.r2.dev";
-        img = `${r2BaseUrl}/images/${id}.webp`;
-        console.log(`🔗 CONSTRUCTED_R2_IMAGE for recipe: ${r.t || r.name} -> ${img}`);
+        // Final Fallback: Construct Proxy Image URL based on ID
+        img = `https://chef-aykut-backend.onrender.com/images/${id}.webp`;
+        console.log(`🔗 CONSTRUCTED_PROXY_IMAGE for recipe: ${r.t || r.name} -> ${img}`);
     } else {
-        console.log(`✅ IMAGE_FOUND for recipe: ${r.t || r.name} -> ${img.substring(0, 30)}...`);
+        img = _resolveImageUrl(img, cat);
+        console.log(`✅ IMAGE_RESOLVED for recipe: ${r.t || r.name} -> ${img.substring(0, 45)}...`);
     }
 
     const chunk = r.h !== undefined ? r.h : (r.chunk !== undefined ? r.chunk : null);
@@ -804,6 +838,49 @@ app.patch('/recipes/:id/image', async (req, res) => {
     } catch (err) {
         console.error(`❌ Error updating image:`, err.message);
         res.status(500).json({ error: "Internal Server Error" });
+    }
+});
+
+app.get('/gastro_images/:filename', async (req, res) => {
+    try {
+        const { filename } = req.params;
+        const key = `gastro_images/${filename}`;
+        
+        const command = new GetObjectCommand({
+            Bucket: BUCKET_NAME,
+            Key: key
+        });
+        
+        const response = await s3Client.send(command);
+        const byteArray = await response.Body.transformToByteArray();
+        
+        res.setHeader('Content-Type', response.ContentType || 'image/webp');
+        res.setHeader('Cache-Control', 'public, max-age=31536000'); // Cache for 1 year
+        res.send(Buffer.from(byteArray));
+    } catch (err) {
+        console.error(`❌ Error proxying gastro image ${req.params.filename}:`, err.message);
+        res.status(404).send("Image not found");
+    }
+});
+
+app.get('/images/:filename', async (req, res) => {
+    try {
+        const { filename } = req.params;
+        const key = `images/${filename}`;
+        
+        const command = new GetObjectCommand({
+            Bucket: BUCKET_NAME,
+            Key: key
+        });
+        
+        const response = await s3Client.send(command);
+        const byteArray = await response.Body.transformToByteArray();
+        
+        res.setHeader('Content-Type', response.ContentType || 'image/webp');
+        res.setHeader('Cache-Control', 'public, max-age=31536000'); // Cache for 1 year
+        res.send(Buffer.from(byteArray));
+    } catch (err) {
+        res.status(404).send("Image not found");
     }
 });
 
