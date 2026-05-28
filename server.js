@@ -744,8 +744,10 @@ app.get('/recipes/:id(*)', async (req, res) => {
         
         console.log(`🔍 API Request for ID: ${targetId}`);
         
-        let query = { i: targetId };
-        let recipe = await collection.findOne(query);
+        let recipe = await collection.findOne({ _id: targetId });
+        if (!recipe) {
+            recipe = await collection.findOne({ i: targetId });
+        }
 
         if (!recipe && targetId.length === 24) {
             try {
@@ -824,10 +826,17 @@ app.patch('/recipes/:id/image', async (req, res) => {
         const db = mongoClient.db("foodi");
         const collection = db.collection("chefaykut");
 
-        const result = await collection.updateOne(
-            { i: id },
+        let result = await collection.updateOne(
+            { _id: id },
             { $set: { img: image, image: image, p: image } }
         );
+
+        if (result.matchedCount === 0) {
+            result = await collection.updateOne(
+                { i: id },
+                { $set: { img: image, image: image, p: image } }
+            );
+        }
 
         if (result.matchedCount === 0) {
             return res.status(404).json({ error: "Recipe not found" });
@@ -863,23 +872,46 @@ app.get('/gastro_images/:filename', async (req, res) => {
     }
 });
 
-app.get('/images/:filename', async (req, res) => {
+app.get('/images/:filename(*)', async (req, res) => {
     try {
         const { filename } = req.params;
         const key = `images/${filename}`;
         
-        const command = new GetObjectCommand({
-            Bucket: BUCKET_NAME,
-            Key: key
-        });
+        // 1. Try to get it from R2 first (e.g. Gastro images or already cached images)
+        try {
+            const command = new GetObjectCommand({
+                Bucket: BUCKET_NAME,
+                Key: key
+            });
+            const response = await s3Client.send(command);
+            const byteArray = await response.Body.transformToByteArray();
+            res.setHeader('Content-Type', response.ContentType || 'image/webp');
+            res.setHeader('Cache-Control', 'public, max-age=31536000'); // Cache for 1 year
+            return res.send(Buffer.from(byteArray));
+        } catch (r2err) {
+            // Not found in R2, proceed to resolve original external URL
+        }
+
+        // 2. Extract recipe ID from filename (e.g. "uuid.webp" or URL slug)
+        const id = filename.replace('.webp', '');
         
-        const response = await s3Client.send(command);
-        const byteArray = await response.Body.transformToByteArray();
+        // 3. Find recipe in MongoDB Atlas to get chunk ID 'h' and title 't'
+        const db = mongoClient.db("foodi");
+        const collection = db.collection("chefaykut");
+        const recipe = await collection.findOne({ _id: id });
         
-        res.setHeader('Content-Type', response.ContentType || 'image/webp');
-        res.setHeader('Cache-Control', 'public, max-age=31536000'); // Cache for 1 year
-        res.send(Buffer.from(byteArray));
+        if (recipe && recipe.h !== undefined && recipe.h !== null) {
+            // 4. Fetch full recipe from chunk to get the original image URL 'p'
+            const details = await getRecipeFromChunk(recipe.h, id, recipe.t);
+            if (details && details.p && typeof details.p === 'string' && details.p.startsWith('http')) {
+                console.log(`✈️ Redirecting to external image: ${details.p}`);
+                return res.redirect(details.p);
+            }
+        }
+        
+        res.status(404).send("Image not found");
     } catch (err) {
+        console.error(`❌ Error serving proxy image:`, err.message);
         res.status(404).send("Image not found");
     }
 });
