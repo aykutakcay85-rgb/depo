@@ -43,6 +43,7 @@ const R2_ACCESS_KEY = process.env.R2_ACCESS_KEY;
 const R2_SECRET_KEY = process.env.R2_SECRET_KEY;
 const BUCKET_NAME = process.env.BUCKET_NAME || "foodi";
 const APP_API_KEY = process.env.APP_API_KEY;
+const GASTRO_CDN_BASE = process.env.GASTRO_CDN_BASE || "https://yemek-resimler.aykutakcay85.workers.dev";
 
 if (!MONGO_URI || !APP_API_KEY) {
     console.error("❌ CRITICAL: Missing required environment variables (MONGO_URI or APP_API_KEY)");
@@ -149,32 +150,39 @@ function normalizeTitle(str) {
         .trim();
 }
 
+// Production backend URL (Render)
+const PROD_BASE_URL = process.env.RENDER_EXTERNAL_URL || "https://chef-aykut-backend.onrender.com";
+
+// Cloudflare R2 gastro public domain (direct CDN, no proxy needed)
 function _resolveImageUrl(url, category = '') {
     if (!url || typeof url !== 'string' || url === 'null') return '';
     
     const baseUrl = url.split('?v=')[0].trim();
-    const proxyBaseUrl = "https://chef-aykut-backend.onrender.com";
     
-    // Check if it belongs to old R2 buckets or Cloudflare Worker
+    // Check if it belongs to old R2 buckets or Cloudflare Worker — rewrite to prod backend proxy
     if (baseUrl.includes('pub-088807d92556487e97d1ec1df970bc86')) {
         const path = baseUrl.replace(/^https?:\/\/pub-088807d92556487e97d1ec1df970bc86\.r2\.dev/, '');
-        return `${proxyBaseUrl}${path}?v=3`;
+        return `${PROD_BASE_URL}${path}?v=3`;
     }
     if (baseUrl.includes('pub-f31f36f3d95441bf8e622e620b1cda67')) {
         const path = baseUrl.replace(/^https?:\/\/pub-f31f36f3d95441bf8e622e620b1cda67\.r2\.dev/, '');
-        return `${proxyBaseUrl}${path}?v=3`;
+        return `${PROD_BASE_URL}${path}?v=3`;
     }
     if (baseUrl.includes('yemek-resimler.aykutakcay85.workers.dev')) {
-        const path = baseUrl.replace(/^https?:\/\/yemek-resimler\.aykutakcay85\.workers\.dev/, '');
-        return `${proxyBaseUrl}${path}?v=3`;
+        // KEEP direct worker URL for Gastro images (super fast, CDN backed, direct to Cloudflare)
+        return `${baseUrl}?v=3`;
     }
     
     // Relative filename (no protocol, no assets/)
     if (baseUrl && !baseUrl.startsWith('http') && !baseUrl.startsWith('assets/')) {
         if (category && category.toLowerCase().includes('gastro')) {
-            return `${proxyBaseUrl}/gastro_images/${baseUrl}?v=3`;
+            // GASTRO_CDN_BASE env ile Cloudflare'den direkt (proxy yok, çok hızlı)
+            if (GASTRO_CDN_BASE) {
+                return `${GASTRO_CDN_BASE}/gastro_images/${baseUrl}`;
+            }
+            return `https://yemek-resimler.aykutakcay85.workers.dev/gastro_images/${baseUrl}?v=3`;
         } else {
-            return `${proxyBaseUrl}/images/${baseUrl}?v=3`;
+            return `${PROD_BASE_URL}/images/${baseUrl}?v=3`;
         }
     }
     
@@ -182,74 +190,197 @@ function _resolveImageUrl(url, category = '') {
 }
 
 const chunkCache = new Map();
-const CACHE_TTL = 10 * 60 * 1000; // 10 minutes
+const CACHE_TTL = 30 * 60 * 1000; // Cache for 30 minutes
 
-async function getRecipeFromChunk(chunkId, recipeId, title = '') {
-    try {
-        const key = `chunk_${chunkId}.json`;
-        const possibleKeys = [key, `foodi/${key}`, `chunks/${key}`];
-        
-        let data;
-        let successKey = '';
+let gastroRecipesCached = null;
+let lastGastroLoadTime = 0;
 
-        // Check cache first
-        const cacheKey = `chunk_${chunkId}`;
-        const cached = chunkCache.get(cacheKey);
-        if (cached && (Date.now() - cached.timestamp < CACHE_TTL)) {
-            console.log(`⚡ Chunk ${chunkId} loaded from CACHE`);
-            data = cached.data;
-        } else {
+async function getGastroRecipes() {
+    if (gastroRecipesCached && (Date.now() - lastGastroLoadTime < CACHE_TTL)) {
+        return gastroRecipesCached;
+    }
+    
+    console.log("📡 Loading all Gastro chunks from R2/Local...");
+    const promises = [];
+    for (let i = 0; i <= 5; i++) {
+        promises.push((async () => {
+            const key = `gastro_chunk_${i}.json`;
+            const possibleKeys = [key, `foodi/${key}`, `chunks/${key}`];
+            let data = null;
+            
+            // Try R2
             for (const k of possibleKeys) {
                 try {
                     const command = new GetObjectCommand({ Bucket: BUCKET_NAME, Key: k });
                     const response = await s3Client.send(command);
                     data = await response.Body.transformToString();
                     if (data) {
-                        successKey = k;
-                        // Store in cache
-                        chunkCache.set(cacheKey, { data, timestamp: Date.now() });
+                        console.log(`✅ Loaded Gastro chunk ${i} from R2`);
                         break;
                     }
-                } catch (r2err) {
+                } catch (err) {
                     // Try next key
                 }
             }
-        }
-
-        if (!data) {
-            // Local Fallback
-            for (const k of possibleKeys) {
-                try {
-                    const fs = require('fs');
-                    const path = require('path');
-                    const localPath = path.join(__dirname, k.includes('/') ? k.split('/').pop() : k);
-                    if (fs.existsSync(localPath)) {
-                        data = fs.readFileSync(localPath, 'utf8');
-                        successKey = `LOCAL:${localPath}`;
-                        break;
-                    }
-                } catch (e) {}
+            
+            // Try local fallback
+            if (!data) {
+                const fs = require('fs');
+                const path = require('path');
+                const pathsToTry = [
+                    path.join(__dirname, key),
+                    path.join(__dirname, '..', key),
+                    path.join(__dirname, '..', 'gastro_output', key),
+                    path.join(__dirname, 'gastro_output', key)
+                ];
+                for (const p of pathsToTry) {
+                    try {
+                        if (fs.existsSync(p)) {
+                            data = fs.readFileSync(p, 'utf8');
+                            console.log(`✅ Loaded Gastro chunk ${i} from Local Fallback: ${p}`);
+                            break;
+                        }
+                    } catch (e) {}
+                }
             }
-        }
-
-        if (!data) {
-            console.warn(`❌ R2/LOCAL Fetch failed for chunk ${chunkId}. Tried: ${possibleKeys.join(', ')}`);
-            return null;
-        }
-
-        console.log(`✅ Chunk ${chunkId} loaded successfully (${data.length} bytes)`);
-        
-        let chunkData;
-        try {
-            const parsed = JSON.parse(data);
-            chunkData = Array.isArray(parsed) ? parsed : [parsed];
-        } catch (jsonErr) {
-            // JSONL Fallback
+            
+            if (!data) {
+                console.warn(`⚠️ Failed to load Gastro chunk ${i}`);
+                return [];
+            }
+            
             try {
-                chunkData = data.trim().split('\n').map(line => JSON.parse(line));
-            } catch (jsonlErr) {
-                console.error(`❌ Parse Error for ${successKey}`);
-                return null;
+                return JSON.parse(data);
+            } catch (e) {
+                console.error(`❌ Error parsing Gastro chunk ${i}:`, e.message);
+                return [];
+            }
+        })());
+    }
+    
+    const results = await Promise.all(promises);
+    const merged = results.flat();
+    console.log(`✅ Loaded ${merged.length} Gastro recipes successfully.`);
+    gastroRecipesCached = merged;
+    lastGastroLoadTime = Date.now();
+    return merged;
+}
+
+let chefRecipesCached = null;
+let lastChefLoadTime = 0;
+
+async function getChefRecipes() {
+    if (chefRecipesCached && (Date.now() - lastChefLoadTime < CACHE_TTL)) {
+        return chefRecipesCached;
+    }
+    
+    console.log("📡 Loading Chef chunk from R2/Local...");
+    const chunkKey = 'chunk_chef.json';
+    const possibleKeys = [chunkKey, `foodi/${chunkKey}`, `chunks/${chunkKey}`];
+    let data = null;
+    
+    for (const k of possibleKeys) {
+        try {
+            const cmd = new GetObjectCommand({ Bucket: BUCKET_NAME, Key: k });
+            const r2res = await s3Client.send(cmd);
+            data = await r2res.Body.transformToString();
+            if (data) {
+                console.log(`✅ Loaded Chef chunk from R2`);
+                break;
+            }
+        } catch (e) {}
+    }
+    
+    if (!data) {
+        // Try local
+        try {
+            const fs = require('fs'), path = require('path');
+            const pathsToTry = [
+                path.join(__dirname, chunkKey),
+                path.join(__dirname, '..', chunkKey)
+            ];
+            for (const p of pathsToTry) {
+                if (fs.existsSync(p)) {
+                    data = fs.readFileSync(p, 'utf8');
+                    console.log(`✅ Loaded Chef chunk from Local`);
+                    break;
+                }
+            }
+        } catch (e) {}
+    }
+    
+    if (!data) {
+        console.warn(`⚠️ Failed to load Chef chunk`);
+        return [];
+    }
+    
+    try {
+        const parsed = JSON.parse(data);
+        chefRecipesCached = Array.isArray(parsed) ? parsed : [parsed];
+        lastChefLoadTime = Date.now();
+        return chefRecipesCached;
+    } catch (e) {
+        console.error(`❌ Error parsing Chef chunk:`, e.message);
+        return [];
+    }
+}
+
+async function getRecipeFromChunk(chunkId, recipeId, title = '') {
+    try {
+        let chunkData;
+        if (chunkId === 'gastro') {
+            chunkData = await getGastroRecipes();
+        } else if (chunkId === 'chef') {
+            chunkData = await getChefRecipes();
+        } else {
+            // Legacy chunk loading logic (like chunk_1.json, etc.)
+            const key = `chunk_${chunkId}.json`;
+            const possibleKeys = [key, `foodi/${key}`, `chunks/${key}`];
+            let data;
+            
+            // Check cache first
+            const cacheKey = `chunk_${chunkId}`;
+            const cached = chunkCache.get(cacheKey);
+            if (cached && (Date.now() - cached.timestamp < CACHE_TTL)) {
+                data = cached.data;
+            } else {
+                for (const k of possibleKeys) {
+                    try {
+                        const command = new GetObjectCommand({ Bucket: BUCKET_NAME, Key: k });
+                        const response = await s3Client.send(command);
+                        data = await response.Body.transformToString();
+                        if (data) {
+                            chunkCache.set(cacheKey, { data, timestamp: Date.now() });
+                            break;
+                        }
+                    } catch (err) {}
+                }
+            }
+            
+            if (!data) {
+                for (const k of possibleKeys) {
+                    try {
+                        const fs = require('fs'), path = require('path');
+                        const localPath = path.join(__dirname, k.includes('/') ? k.split('/').pop() : k);
+                        if (fs.existsSync(localPath)) {
+                            data = fs.readFileSync(localPath, 'utf8');
+                            break;
+                        }
+                    } catch (e) {}
+                }
+            }
+            
+            if (!data) return null;
+            
+            try {
+                const parsed = JSON.parse(data);
+                chunkData = Array.isArray(parsed) ? parsed : [parsed];
+            } catch (jsonErr) {
+                try {
+                    chunkData = data.trim().split('\n').map(line => JSON.parse(line));
+                } catch (jsonlErr) {
+                    return null;
+                }
             }
         }
 
@@ -258,7 +389,6 @@ async function getRecipeFromChunk(chunkId, recipeId, title = '') {
             const tid = recipeId.toString();
             if (rid && rid === tid) return true;
             
-            // Match by title as a fallback for ALL categories if ID fails
             if (title) {
                 const rTitleNorm = normalizeTitle(r.t || r.title || r.name || '');
                 const targetTitleNorm = normalizeTitle(title);
@@ -267,9 +397,6 @@ async function getRecipeFromChunk(chunkId, recipeId, title = '') {
             return false;
         });
 
-        if (!found) {
-            console.warn(`⚠️ Recipe ${recipeId} not found in chunk ${chunkId} by ID or Title (${title})`);
-        }
         return found || null;
     } catch (err) {
         console.error(`🔥 getRecipeFromChunk Error:`, err.message);
@@ -488,41 +615,101 @@ app.get('/recipes', async (req, res) => {
         const db = mongoClient.db("foodi");
         const collection = db.collection("chefaykut");
 
-        // ── Chef Pro: Doğrudan R2 chunk'tan serve et ──────────────────────────
+        // ── Gastro & Chef Pro: Doğrudan R2 chunk'tan serve et ──────────────────
         const cat = (category || '').toLowerCase();
+
+        if (cat === 'gastro') {
+            try {
+                const gastroChunk = await getGastroRecipes();
+
+                let filtered = gastroChunk;
+                if (subcategory) {
+                    const sub = subcategory.toLowerCase();
+                    filtered = gastroChunk.filter(r => 
+                        (r.s || r.subcategory || '').toLowerCase().includes(sub)
+                    );
+                }
+                if (query_text) {
+                    const q = query_text.toLowerCase();
+                    filtered = filtered.filter(r =>
+                        (r.t || r.title || '').toLowerCase().includes(q)
+                    );
+                }
+
+                const start = page * limit;
+                const slice = filtered.slice(start, start + limit);
+                return res.json(slice.map(r => {
+                    const imgRaw = r.p || r.img || r.image || '';
+                    const imgUrl = _resolveImageUrl(imgRaw, 'gastro');
+                    return {
+                        i: r.i || r.id || r.uid || '',
+                        t: r.t || r.title || '',
+                        c: 'gastro',
+                        h: 'gastro',
+                        p: imgRaw,
+                        r: r.r || r.rating || 0,
+                        s: r.s || r.subcategory || '',
+                        g: r.g || r.nb_servings || '',
+                        l: r.l || r.total_time || r.prep_time || '',
+                        m: r.m || r.ingredients || [],
+                        y: r.y || r.steps || r.instructions || [],
+                        id: r.i || r.id || r.uid || '',
+                        title: r.t || r.title || '',
+                        category: 'gastro',
+                        img: imgUrl,
+                        image: imgUrl,
+                        imageUrl: imgUrl,
+                    };
+                }));
+            } catch (gastroErr) {
+                console.warn('⚠️ Gastro chunk serve failed:', gastroErr.message);
+                return res.json([]);
+            }
+        }
+
         if (cat === 'chef' || cat === 'chef_pro' || cat.includes('chef')) {
             try {
-                const chunkKey = 'chunk_chef.json';
-                const cmd = new GetObjectCommand({ Bucket: BUCKET_NAME, Key: chunkKey });
-                let chefChunk;
-                try {
-                    const r2res = await s3Client.send(cmd);
-                    const raw = await r2res.Body.transformToString();
-                    chefChunk = JSON.parse(raw);
-                } catch {
-                    const fs = require('fs'), path = require('path');
-                    const localPath = path.join(__dirname, chunkKey);
-                    chefChunk = JSON.parse(require('fs').readFileSync(localPath, 'utf8'));
+                const chefChunk = await getChefRecipes();
+
+                let filtered = chefChunk;
+                if (subcategory) {
+                    const sub = subcategory.toLowerCase();
+                    filtered = chefChunk.filter(r => 
+                        (r.s || r.subcategory || '').toLowerCase().includes(sub)
+                    );
                 }
+                if (query_text) {
+                    const q = query_text.toLowerCase();
+                    filtered = filtered.filter(r =>
+                        (r.t || r.title || '').toLowerCase().includes(q)
+                    );
+                }
+
                 const start = page * limit;
-                const slice = chefChunk.slice(start, start + limit);
-                return res.json(slice.map(r => ({
-                    i: r.i || r.id || r.uid || '',
-                    t: r.t || r.title || '',
-                    c: 'chef_pro',
-                    h: 'chef',
-                    p: r.p || r.img || r.image || '',
-                    r: r.r || r.rating || 0,
-                    s: r.s || r.subcategory || '',
-                    g: r.g || r.nb_servings || '',
-                    l: r.l || r.total_time || r.prep_time || '',
-                    m: r.m || r.ingredients || [],
-                    y: r.y || r.steps || r.instructions || [],
-                    id: r.i || r.id || r.uid || '',
-                    title: r.t || r.title || '',
-                    category: 'chef_pro',
-                    image: r.p || r.img || r.image || '',
-                })));
+                const slice = filtered.slice(start, start + limit);
+                return res.json(slice.map(r => {
+                    const imgRaw = r.p || r.img || r.image || '';
+                    const imgUrl = _resolveImageUrl(imgRaw, 'chef');
+                    return {
+                        i: r.i || r.id || r.uid || '',
+                        t: r.t || r.title || '',
+                        c: 'chef_pro',
+                        h: 'chef',
+                        p: imgRaw,
+                        r: r.r || r.rating || 0,
+                        s: r.s || r.subcategory || '',
+                        g: r.g || r.nb_servings || '',
+                        l: r.l || r.total_time || r.prep_time || '',
+                        m: r.m || r.ingredients || [],
+                        y: r.y || r.steps || r.instructions || [],
+                        id: r.i || r.id || r.uid || '',
+                        title: r.t || r.title || '',
+                        category: 'chef_pro',
+                        img: imgUrl,
+                        image: imgUrl,
+                        imageUrl: imgUrl,
+                    };
+                }));
             } catch (chefErr) {
                 console.warn('⚠️ Chef chunk serve failed:', chefErr.message);
                 // Fallback to MongoDB
@@ -756,8 +943,27 @@ app.get('/recipes/:id(*)', async (req, res) => {
         }
 
         if (!recipe) {
-            console.log(`❌ Recipe not found in MongoDB: ${targetId}`);
-            return res.status(404).json({ error: "Recipe not found in database", id: targetId });
+            console.log(`❌ Recipe not found in MongoDB: ${targetId}. Trying memory chunks fallback...`);
+            // Try to find it directly in Gastro and Chef chunks
+            const gastroChunk = await getGastroRecipes();
+            let foundInChunk = gastroChunk.find(r => {
+                const rid = (r.i || r.id || r.uid || r.url || '').toString();
+                return rid === targetId || normalizeTitle(r.t || r.title || '') === normalizeTitle(targetId);
+            });
+            if (!foundInChunk) {
+                const chefChunk = await getChefRecipes();
+                foundInChunk = chefChunk.find(r => {
+                    const rid = (r.i || r.id || r.uid || r.url || '').toString();
+                    return rid === targetId || normalizeTitle(r.t || r.title || '') === normalizeTitle(targetId);
+                });
+            }
+            
+            if (foundInChunk) {
+                console.log(`✅ Found recipe in chunk fallback: ${foundInChunk.t || foundInChunk.title || 'Untitled'}`);
+                return res.json(_formatRecipe(foundInChunk, foundInChunk));
+            }
+            
+            return res.status(404).json({ error: "Recipe not found in database or chunks", id: targetId });
         }
 
         console.log(`✅ Found in Mongo: ${recipe.t} (ID: ${recipe.i}, h: ${recipe.h}, _id: ${recipe._id})`);
@@ -791,15 +997,15 @@ app.get('/recipes/:id(*)', async (req, res) => {
             }
         }
     
-            // 🔄 FALLBACK: If primary chunk fails, try Chef and Gastro
-            if (!details && recipe.h !== 'chef' && recipe.h !== 'gastro') {
-                console.log(`🔍 Fallback: Trying 'chef' chunk...`);
-                details = await getRecipeFromChunk('chef', recipe.i || recipe._id, recipe.t || recipe.title);
-                if (!details) {
-                    console.log(`🔍 Fallback: Trying 'gastro' chunk...`);
-                    details = await getRecipeFromChunk('gastro', recipe.i || recipe._id, recipe.t || recipe.title);
-                }
+        // 🔄 FALLBACK: If primary chunk fails, try Chef and Gastro
+        if (!details && recipe.h !== 'chef' && recipe.h !== 'gastro') {
+            console.log(`🔍 Fallback: Trying 'chef' chunk...`);
+            details = await getRecipeFromChunk('chef', recipe.i || recipe._id, recipe.t || recipe.title);
+            if (!details) {
+                console.log(`🔍 Fallback: Trying 'gastro' chunk...`);
+                details = await getRecipeFromChunk('gastro', recipe.i || recipe._id, recipe.t || recipe.title);
             }
+        }
             
         if (details) {
             console.log(`✨ Successfully hydrated from R2!`);
@@ -853,8 +1059,22 @@ app.patch('/recipes/:id/image', async (req, res) => {
 app.get('/gastro_images/:filename', async (req, res) => {
     try {
         const { filename } = req.params;
+        
+        // If a direct Cloudflare CDN base is configured, redirect there instantly (no proxy overhead)
+        if (GASTRO_CDN_BASE) {
+            return res.redirect(302, `${GASTRO_CDN_BASE}/gastro_images/${filename}`);
+        }
+
         const key = `gastro_images/${filename}`;
         
+        // Get a pre-signed or public URL from R2 and redirect — much faster than proxying binary
+        // Try to generate a redirect URL using the R2 public endpoint
+        const r2PublicBase = process.env.R2_PUBLIC_BASE || '';
+        if (r2PublicBase) {
+            return res.redirect(302, `${r2PublicBase}/${key}`);
+        }
+
+        // Fallback: proxy the binary (slow but works)
         const command = new GetObjectCommand({
             Bucket: BUCKET_NAME,
             Key: key
