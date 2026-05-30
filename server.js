@@ -103,38 +103,153 @@ function authenticate(req, res, next) {
 app.use(authenticate);
 
 function getCategoryQuery(category) {
-    const cat = category.toLowerCase();
+    const cat = category.toLowerCase().trim();
     if (cat === 'all') return {};
     if (cat === 'gastro') return { c: { $regex: '^gastro$', $options: 'i' } };
     if (cat === 'chef_pro' || cat === 'chef' || cat.includes('chef')) {
         return { c: { $regex: '^chef_pro$', $options: 'i' } };
     }
-    if (cat === 'main' || cat === 'main course' || cat === 'ana yemek') {
-        return { c: { $regex: 'Main Dishes|Et Yemekleri|Tavuk Yemekleri|Balık Yemekleri|Kebap|Köfte|Sebze Yemekleri|Dolma-Sarma|Bakliyat|Pilav|Makarna|Ana Yemek', $options: 'i' } };
-    } else if (cat === 'appetizer' || cat === 'meze' || cat === 'baslangic') {
-        return { c: { $regex: 'Appetizer|Meze|Başlangıçlar|Ara Sıcak|Zeytinyağlılar', $options: 'i' } };
-    } else if (cat === 'breakfast' || cat === 'kahvalti') {
-        return { c: { $regex: 'Breakfast|Kahvaltı|Kahvaltılık', $options: 'i' } };
-    } else if (cat === 'soup' || cat === 'corba') {
-        return { c: { $regex: 'Soup|Çorba|Çorbalar', $options: 'i' } };
-    } else if (cat === 'dessert' || cat === 'tatli') {
-        return { c: { $regex: 'Dessert|Tatlı|Tatlılar|Pastalar|Kurabiyeler', $options: 'i' } };
-    } else if (cat === 'salad' || cat === 'salata') {
-        return { c: { $regex: 'Salad|Salata|Salatalar', $options: 'i' } };
-    } else if (cat === 'bread' || cat === 'bakery' || cat === 'hamur') {
-        return { c: { $regex: 'Bread|Bakery|Ekmek|Hamur İşi|Börek|Poğaça|Pizzalar', $options: 'i' } };
-    } else if (cat === 'sauce' || cat === 'sos') {
-        return { c: { $regex: 'Sauce|Sos|Soslar', $options: 'i' } };
-    } else if (cat === 'beverage' || cat === 'icecek') {
-        return { c: { $regex: 'Beverage|İçecek|İçecekler|Kokteyller', $options: 'i' } };
-    } else if (cat === 'preserve' || cat === 'konserve' || cat === 'recel') {
-        return { c: { $regex: 'Preserve|Reçel|Konserve|Kış Hazırlıkları|Turşular', $options: 'i' } };
-    } else if (cat === 'other' || cat === 'diger') {
-        return { c: { $regex: 'Other|Diğer', $options: 'i' } };
-    } else {
-        const safeCategory = category.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        return { c: { $regex: '^' + safeCategory + '$', $options: 'i' } };
+
+    const mapping = {
+        // Main Dishes / Aksam yemegi
+        'main': 'Main Dishes|Et Yemekleri|Tavuk Yemekleri|Bal[ıİ.]k Yemekleri|Kebap|K[öÖ.]fte|Sebze Yemekleri|Dolma-Sarma|Bakliyat|Pilav|Makarna|Ana Yemek',
+        'main course': 'Main Dishes|Et Yemekleri|Tavuk Yemekleri|Bal[ıİ.]k Yemekleri|Kebap|K[öÖ.]fte|Sebze Yemekleri|Dolma-Sarma|Bakliyat|Pilav|Makarna|Ana Yemek',
+        'ana yemek': 'Main Dishes|Et Yemekleri|Tavuk Yemekleri|Bal[ıİ.]k Yemekleri|Kebap|K[öÖ.]fte|Sebze Yemekleri|Dolma-Sarma|Bakliyat|Pilav|Makarna|Ana Yemek',
+        'aksam_yemegi': 'Main Dishes|Et Yemekleri|Tavuk Yemekleri|Bal[ıİ.]k Yemekleri|Kebap|K[öÖ.]fte|Sebze Yemekleri|Dolma-Sarma|Bakliyat|Pilav|Makarna|Ana Yemek',
+
+        // Appetizer / Meze
+        'appetizer': 'Appetizer|Meze|Ba[şŞ.]lang[ıİ.][çÇ.]lar|Ara S[ıİ.]cak|Zeytinya[ğĞ.]l[ıİ.]lar|Aperatifler',
+        'meze': 'Salata & Meze & Kanepe|Meze|Aperatifler',
+        'baslangic': 'Ba[şŞ.]lang[ıİ.][çÇ.]lar|Ara S[ıİ.]cak|Aperatifler',
+        'atistirmalik': 'Aperatifler|Kurabiye Tarifleri',
+        'aperatifler': 'Aperatifler',
+        'tuzlu_atistirmalik': 'Aperatifler|Kurabiye Tarifleri',
+
+        // Breakfast
+        'breakfast': 'Breakfast|Kahvalt[ıİ.]|Kahvalt[ıİ.]l[ıİ.]k',
+        'kahvalti': 'Breakfast|Kahvalt[ıİ.]|Kahvalt[ıİ.]l[ıİ.]k',
+        'kahvaltilik': 'Breakfast|Kahvalt[ıİ.]l[ıİ.]k',
+        'kahvaltilik_tarifler': 'Kahvalt[ıİ.]l[ıİ.]k Tarifler',
+        'tost': 'Kahvalt[ıİ.]l[ıİ.]k Tarifler',
+
+        // Soup
+        'soup': 'Soup|[Çç.]orba Tarifleri|[Çç.]orbalar|Soups',
+        'corba': 'Soup|[Çç.]orba Tarifleri|[Çç.]orbalar',
+        'corba_tarifleri': '[Çç.]orba Tarifleri',
+
+        // Dessert / Tatli
+        'dessert': 'Dessert|Tatl[ıİ.] Tarifleri|Tatl[ıİ.]lar|Pastalar|Kurabiyeler|Desserts|dessert',
+        'tatli': 'Dessert|Tatl[ıİ.] Tarifleri|Tatl[ıİ.]lar|Pastalar|Kurabiyeler|Desserts|dessert',
+        'tatli_tarifleri': 'Tatl[ıİ.] Tarifleri',
+        'cikolatali_tatli': 'Tatl[ıİ.] Tarifleri|Desserts',
+        'dondurma': 'Tatl[ıİ.] Tarifleri|Desserts',
+        'helva': 'Tatl[ıİ.] Tarifleri',
+        'meyveli_tatli': 'Tatl[ıİ.] Tarifleri',
+        'serbetli_tatli': 'Tatl[ıİ.] Tarifleri',
+        'sutlu_tatli': 'Tatl[ıİ.] Tarifleri',
+        'tatli_atistirmalik': 'Kurabiye Tarifleri|Tatl[ıİ.] Tarifleri',
+        'tatli_kek': 'Hamur [İi.][şŞ.]i Tarifleri|Tatl[ıİ.] Tarifleri',
+        'tatli_kurabiye': 'Kurabiye Tarifleri|Tatl[ıİ.] Tarifleri',
+
+        // Salad
+        'salad': 'Salad|Salata|Salatalar|Salads',
+        'salata': 'Salad|Salata|Salatalar|Salads',
+
+        // Bread / Dough
+        'bread': 'Bread|Bakery|Ekmek|Hamur [İi.][şŞ.]i Tarifleri|B[öÖ.]rek|Poga[çÇ.]a|Pizzalar|Breads',
+        'bakery': 'Bread|Bakery|Ekmek|Hamur [İi.][şŞ.]i Tarifleri|B[öÖ.]rek|Poga[çÇ.]a|Pizzalar|Breads',
+        'hamur': 'Hamur [İi.][şŞ.]i Tarifleri',
+        'borek': 'Hamur [İi.][şŞ.]i Tarifleri',
+        'corek': 'Hamur [İi.][şŞ.]i Tarifleri',
+        'ekmek': 'Bread|Breads|BREADS|bread',
+        'hamur_isi': 'Hamur [İi.][şŞ.]i Tarifleri',
+        'hamur_isi_tarifleri': 'Hamur [İi.][şŞ.]i Tarifleri',
+        'pide': 'Hamur [İi.][şŞ.]i Tarifleri',
+        'pogaca': 'Hamur [İi.][şŞ.]i Tarifleri',
+        'manti': 'Hamur [İi.][şŞ.]i Tarifleri',
+
+        // Sauce
+        'sauce': 'Sauce|Sos|Soslar|sauce',
+        'sos': 'Sauce|Sos|Soslar|sauce',
+
+        // Beverages
+        'beverage': 'Beverage|[İi.]ecek Tarifleri|[İi.]ecekler|Kokteyller|BEVERAGES|Beverages|drink',
+        'icecek': 'Beverage|[İi.]ecek Tarifleri|[İi.]ecekler|Kokteyller|BEVERAGES|Beverages|drink',
+        'icecek_tarifleri': '[İi.]ecek Tarifleri|BEVERAGES|Beverages|drink',
+
+        // Preserves
+        'preserve': 'Preserve|Re[çÇ.]el|Konserve|K[ıİ.][şŞ.] Haz[ıİ.]rl[ıİ.]klar[ıİ.]|Tur[şŞ.]ular|Di[ğĞ.]er Tarifler',
+        'konserve': 'Preserve|Re[çÇ.]el|Konserve|K[ıİ.][şŞ.] Haz[ıİ.]rl[ıİ.]klar[ıİ.]|Tur[şŞ.]ular',
+        'recel': 'Di[ğĞ.]er Tarifler',
+        'kis_hazirliklari': 'Di[ğĞ.]er Tarifler',
+        'tursu': 'Di[ğĞ.]er Tarifler',
+
+        // Other
+        'other': 'Other|Di[ğĞ.]er Tarifler|Di[ğĞ.]er',
+        'diger': 'Other|Di[ğĞ.]er Tarifler|Di[ğĞ.]er',
+        'diger_tarifler': 'Di[ğĞ.]er Tarifler',
+        'sizden_gelenler': 'Other|Di[ğĞ.]er Tarifler',
+        'mevsiminde': 'Other|Di[ğĞ.]er Tarifler',
+
+        // Specific Turkish categories
+        'bakliyat': 'Bakliyat Yemekleri',
+        'bakliyat_yemekleri': 'Bakliyat Yemekleri',
+        'balik': 'Bal[ıİ.]k|Seafood|Main Dishes: Seafood',
+        'deniz_urunleri': 'Seafood|Main Dishes: Seafood',
+        'bebek': 'Bebekler [İi.][çÇ.]in',
+        'bebekler_icin': 'Bebekler [İi.][çÇ.]in',
+        'diyet': 'Diyet Yemekleri|Diyetler',
+        'diyet_yemekleri': 'Diyet Yemekleri',
+        'diyetler': 'Diyetler',
+        'glutensiz': 'Diyet Yemekleri',
+        'ozel_beslenme': 'Diyet Yemekleri',
+        'vegan': 'Diyet Yemekleri|Main Dishes: Vegetarian',
+        'vejetaryen': 'Diyet Yemekleri|Main Dishes: Vegetarian',
+        'raw_food': 'Diyet Yemekleri',
+        'dolma_sarma': 'Dolma-Sarma Tarifleri',
+        'dolmasarma_tarifleri': 'Dolma-Sarma Tarifleri',
+        'et': 'Et Yemekleri|Beef|Lamb|Meats',
+        'et_yemekleri': 'Et Yemekleri',
+        'sakatat': 'Et Yemekleri',
+        'firin_yemekleri': 'Et Yemekleri|Sebze Yemekleri',
+        'hamburger': 'Aperatifler|H[ıİ.]zl[ıİ.] Yemekler',
+        'hizli_yemek': 'H[ıİ.]zl[ıİ.] Yemekler',
+        'hizli_yemekler': 'H[ıİ.]zl[ıİ.] Yemekler',
+        'kebap': 'Et Yemekleri',
+        'kofte': 'Et Yemekleri',
+        'kurabiye': 'Kurabiye Tarifleri',
+        'kurabiye_tarifleri': 'Kurabiye Tarifleri',
+        'makarna': 'Makarna Tarifleri|Pasta',
+        'makarna_tarifleri': 'Makarna Tarifleri',
+        'pilav': 'Pilav Tarifleri|Rice',
+        'pilav_tarifleri': 'Pilav Tarifleri',
+        'pizza': 'pizza|Hamur [İi.][şŞ.]i Tarifleri',
+        'ramazan': '[İi.].*ftar Men[üÜ.]leri|Et Yemekleri',
+        'iftar_menuleri': '[İi.].*ftar Men[üÜ.]leri',
+        'sandvic': 'Sandvi[çÇ.] Tarifleri',
+        'sandvic_tarifleri': 'Sandvi[çÇ.] Tarifleri',
+        'sebze': 'Sebze Yemekleri|Vegetables',
+        'sebze_yemekleri': 'Sebze Yemekleri',
+        'sulu_yemek': 'Sebze Yemekleri|Et Yemekleri',
+        'tavuk': 'Main Dishes: Poultry|Chicken|Et Yemekleri',
+        'tuzlu_kurabiye': 'Kurabiye Tarifleri',
+        'yoresel_tarifler': 'Et Yemekleri|Sebze Yemekleri',
+        'zeytinyagli': 'Sebze Yemekleri|Salata & Meze & Kanepe',
+        'annemin_tarifleri': 'Annemin Tarifleri',
+        'salata__meze__kanepe': 'Salata & Meze & Kanepe',
+        'cocuklar_icin': '[Çç.]ocuklar [İi.][çÇ.]in',
+        'yumurta_yemekleri': 'Yumurta Yemekleri',
+        'ozel_gunler': '[Öö.]zel G[üÜöÖ.]nler',
+        'dunya_mutfaklari': 'Other|Di[ğĞ.]er Tarifler',
+        'masterchef': 'chef_pro'
+    };
+
+    if (mapping[cat]) {
+        return { c: { $regex: mapping[cat], $options: 'i' } };
     }
+
+    const safeCategory = category.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return { c: { $regex: '^' + safeCategory + '$', $options: 'i' } };
 }
 
 function normalizeTitle(str) {
