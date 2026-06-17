@@ -735,8 +735,25 @@ app.get('/recipes', async (req, res) => {
         // ── Gastro & Chef Pro: Doğrudan R2 chunk'tan serve et ──────────────────
         const cat = (category || '').toLowerCase();
 
-        // ⚠️ DEPRECATED: We now fetch all recipes from MongoDB directly to include new scraped recipes
-        // instead of using static JSON chunks.
+        if (cat === 'gastro' || cat === 'gastro_recipes') {
+            let gastroChunk = await getGastroRecipes();
+            if (query_text) {
+                const q = normalizeTitle(query_text);
+                gastroChunk = gastroChunk.filter(r => normalizeTitle(r.t || r.title || '').includes(q));
+            }
+            const paged = gastroChunk.slice(page * limit, (page + 1) * limit);
+            return res.json(paged.map(r => _formatRecipe(r, r)));
+        }
+        
+        if (cat === 'chef_pro' || cat === 'chef' || cat.includes('chef')) {
+            let chefChunk = await getChefRecipes();
+            if (query_text) {
+                const q = normalizeTitle(query_text);
+                chefChunk = chefChunk.filter(r => normalizeTitle(r.t || r.title || '').includes(q));
+            }
+            const paged = chefChunk.slice(page * limit, (page + 1) * limit);
+            return res.json(paged.map(r => _formatRecipe(r, r)));
+        }
         
         if (query_text && query_text.length > 1) {
             try {
