@@ -810,7 +810,7 @@ app.get('/recipes', async (req, res) => {
         if (query_text) query.t = { $regex: '^' + query_text, $options: 'i' };
 
         const recipes = await collection.find(query)
-            .sort({ r: -1 }) 
+            .sort({ r: -1, _id: 1 }) 
             .skip(page * limit)
             .limit(limit)
             .toArray();
