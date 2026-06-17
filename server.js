@@ -809,7 +809,7 @@ app.get('/recipes', async (req, res) => {
         }
         if (query_text) query.t = { $regex: '^' + query_text, $options: 'i' };
 
-        const recipes = await collection.find(query)
+        const recipes = await collection.find(query, { allowDiskUse: true })
             .sort({ r: -1, _id: 1 }) 
             .skip(page * limit)
             .limit(limit)
