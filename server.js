@@ -1021,7 +1021,7 @@ app.get('/recipes/:id(*)', async (req, res) => {
 
         // HYDRATION LOGIC: Merge data from external chunks (Chef/Gastro datasets)
         let details = null;
-        let effectiveH = recipe.h;
+        let effectiveH = recipe.h !== undefined ? recipe.h : recipe.chunk;
 
         // Force hydration for specific categories if 'h' is missing
         if (!effectiveH) {
@@ -1175,9 +1175,10 @@ app.get('/images/:filename(*)', async (req, res) => {
         if (!recipe) recipe = await collection.findOne({ id: id });
         if (!recipe) recipe = await collection.findOne({ i: id });
         
-        if (recipe && recipe.h !== undefined && recipe.h !== null) {
+        const chunk = recipe ? (recipe.h !== undefined ? recipe.h : (recipe.chunk !== undefined ? recipe.chunk : null)) : null;
+        if (recipe && chunk !== null) {
             // 4. Fetch full recipe from chunk to get the original image URL 'p'
-            const details = await getRecipeFromChunk(recipe.h, id, recipe.t);
+            const details = await getRecipeFromChunk(chunk, id, recipe.t);
             if (details && details.p && typeof details.p === 'string' && details.p.startsWith('http')) {
                 console.log(`✈️ Redirecting to external image: ${details.p}`);
                 return res.redirect(details.p);
