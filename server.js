@@ -830,11 +830,8 @@ app.get('/recipes', async (req, res) => {
 
         let cursor = collection.find(query);
         
-        // Only sort if we're not querying by a specific category, 
-        // to avoid the 32MB memory limit on Atlas Free Tier (which blocks allowDiskUse)
-        if (!category || category.toLowerCase() === 'all') {
-            cursor = cursor.sort({ r: -1, _id: 1 });
-        }
+        // Always sort by _id to ensure stable pagination, otherwise scrolling will yield duplicates
+        cursor = cursor.sort({ _id: 1 });
         
         const recipes = await cursor
             .skip(page * limit)
