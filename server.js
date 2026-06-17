@@ -956,7 +956,9 @@ app.get('/recipes/:id(*)', async (req, res) => {
     try {
         const db = mongoClient.db("foodi");
         const collection = db.collection("chefaykut");
-        const targetId = req.params.id;
+        let targetId = req.params.id;
+        if (targetId.startsWith('https:/') && !targetId.startsWith('https://')) targetId = targetId.replace('https:/', 'https://');
+        if (targetId.startsWith('http:/') && !targetId.startsWith('http://')) targetId = targetId.replace('http:/', 'http://');
         
         console.log(`🔍 API Request for ID: ${targetId}`);
         
@@ -1142,12 +1144,15 @@ app.get('/images/:filename(*)', async (req, res) => {
         }
 
         // 2. Extract recipe ID from filename (e.g. "uuid.webp" or URL slug)
-        const id = filename.replace('.webp', '');
+        let id = filename.replace('.webp', '');
+        if (id.startsWith('https:/') && !id.startsWith('https://')) id = id.replace('https:/', 'https://');
+        if (id.startsWith('http:/') && !id.startsWith('http://')) id = id.replace('http:/', 'http://');
         
         // 3. Find recipe in MongoDB Atlas to get chunk ID 'h' and title 't'
         const db = mongoClient.db("foodi");
         const collection = db.collection("chefaykut");
-        const recipe = await collection.findOne({ _id: id });
+        let recipe = await collection.findOne({ _id: id });
+        if (!recipe) recipe = await collection.findOne({ i: id });
         
         if (recipe && recipe.h !== undefined && recipe.h !== null) {
             // 4. Fetch full recipe from chunk to get the original image URL 'p'
