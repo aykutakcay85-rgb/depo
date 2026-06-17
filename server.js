@@ -809,8 +809,15 @@ app.get('/recipes', async (req, res) => {
         }
         if (query_text) query.t = { $regex: '^' + query_text, $options: 'i' };
 
-        const recipes = await collection.find(query, { allowDiskUse: true })
-            .sort({ r: -1, _id: 1 }) 
+        let cursor = collection.find(query);
+        
+        // Only sort if we're not querying by a specific category, 
+        // to avoid the 32MB memory limit on Atlas Free Tier (which blocks allowDiskUse)
+        if (!category || category.toLowerCase() === 'all') {
+            cursor = cursor.sort({ r: -1, _id: 1 });
+        }
+        
+        const recipes = await cursor
             .skip(page * limit)
             .limit(limit)
             .toArray();
