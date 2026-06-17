@@ -981,6 +981,9 @@ app.get('/recipes/:id(*)', async (req, res) => {
         
         let recipe = await collection.findOne({ _id: targetId });
         if (!recipe) {
+            recipe = await collection.findOne({ id: targetId });
+        }
+        if (!recipe) {
             recipe = await collection.findOne({ i: targetId });
         }
 
@@ -1169,6 +1172,7 @@ app.get('/images/:filename(*)', async (req, res) => {
         const db = mongoClient.db("foodi");
         const collection = db.collection("chefaykut");
         let recipe = await collection.findOne({ _id: id });
+        if (!recipe) recipe = await collection.findOne({ id: id });
         if (!recipe) recipe = await collection.findOne({ i: id });
         
         if (recipe && recipe.h !== undefined && recipe.h !== null) {
