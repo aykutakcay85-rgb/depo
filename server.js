@@ -47,6 +47,11 @@ const BUCKET_NAME = process.env.BUCKET_NAME || "foodi";
 const APP_API_KEY = process.env.APP_API_KEY;
 const GASTRO_CDN_BASE = process.env.GASTRO_CDN_BASE || "https://yemek-resimler.aykutakcay85.workers.dev";
 
+// Cloudflare KV (scraped image URLs) — set these in Render environment variables
+const CF_KV_ACCOUNT_ID   = process.env.CF_KV_ACCOUNT_ID;
+const CF_KV_NAMESPACE_ID = process.env.CF_KV_NAMESPACE_ID;
+const CF_KV_TOKEN        = process.env.CF_KV_TOKEN;
+
 if (!MONGO_URI || !APP_API_KEY) {
     console.error("❌ CRITICAL: Missing required environment variables (MONGO_URI or APP_API_KEY)");
     process.exit(1);
@@ -83,6 +88,32 @@ const s3Client = new S3Client({
         secretAccessKey: R2_SECRET_KEY,
     },
 });
+
+// ── Cloudflare KV helper ─────────────────────────────────────────────────
+const kvCache = new Map(); // in-memory cache so we don't hammer CF API
+
+async function getImageFromKV(recipeName) {
+    if (!recipeName) return null;
+    const key = recipeName.trim();
+    if (kvCache.has(key)) return kvCache.get(key);
+    try {
+        const url = `https://api.cloudflare.com/client/v4/accounts/${CF_KV_ACCOUNT_ID}/storage/kv/namespaces/${CF_KV_NAMESPACE_ID}/values/${encodeURIComponent(key)}`;
+        const res = await fetch(url, {
+            headers: { 'Authorization': `Bearer ${CF_KV_TOKEN}` },
+            signal: AbortSignal.timeout(3000),
+        });
+        if (res.ok) {
+            const imgUrl = (await res.text()).trim();
+            if (imgUrl && imgUrl.startsWith('http')) {
+                kvCache.set(key, imgUrl);
+                return imgUrl;
+            }
+        }
+    } catch (_) { /* KV lookup is best-effort */ }
+    kvCache.set(key, null); // cache miss to avoid repeat calls
+    return null;
+}
+// ─────────────────────────────────────────────────────────────────────────
 
 // SECURITY: API KEY
 // Moved to process.env.APP_API_KEY
@@ -669,7 +700,7 @@ app.get('/home/previews', async (req, res) => {
             const query = getCategoryQuery(cat);
             const recipe = await collection.findOne(query, { sort: { r: -1 } });
             if (recipe) {
-                results[cat] = _formatRecipe(recipe);
+                results[cat] = await _formatRecipe(recipe);
             }
         });
 
@@ -801,7 +832,7 @@ app.get('/recipes', async (req, res) => {
                 }
 
                 const searchResults = await collection.aggregate(searchPipeline).toArray();
-                return res.json(searchResults.map(r => _formatRecipe(r)));
+                return res.json(await Promise.all(searchResults.map(r => _formatRecipe(r))));
             } catch (searchErr) {
                 console.warn("⚠️ Atlas Search failed, falling back to Regex:", searchErr.message);
             }
@@ -830,14 +861,14 @@ app.get('/recipes', async (req, res) => {
             .limit(limit)
             .toArray();
             
-        res.json(recipes.map(r => _formatRecipe(r)));
+        res.json(await Promise.all(recipes.map(r => _formatRecipe(r))));
     } catch (err) {
         console.error(`❌ Server Error:`, err.message);
         res.status(500).json({ error: "Internal Server Error" });
     }
 });
 
-function _formatRecipe(r, details = null) {
+async function _formatRecipe(r, details = null) {
     const cat = (r.c || r.category || '').toLowerCase();
     const fallbackImages = {
         'dessert':   'https://images.unsplash.com/photo-1551024506-0bccd828d307?q=80&w=500',
@@ -892,13 +923,21 @@ function _formatRecipe(r, details = null) {
     }
 
     if (!img) {
-        // Final Fallback: Construct Proxy Image URL based on ID ONLY for gastro and chef_pro
-        const safeCat = (cat || '').toLowerCase();
-        if (safeCat === 'gastro' || safeCat === 'chef_pro') {
-            img = `https://chef-aykut-backend.onrender.com/images/${id}.webp`;
-            console.log(`🔗 CONSTRUCTED_PROXY_IMAGE for recipe: ${r.t || r.name} -> ${img}`);
+        // Try Cloudflare KV (scraped Yandex images) before giving up
+        const recipeName = r.t || r.title || r.name || '';
+        const kvImg = await getImageFromKV(recipeName);
+        if (kvImg) {
+            img = kvImg;
+            console.log(`🗝️  KV_IMAGE for '${recipeName}': ${img.substring(0,60)}`);
         } else {
-            img = 'NO_IMAGE';
+            // Final Fallback: Construct Proxy Image URL based on ID ONLY for gastro and chef_pro
+            const safeCat = (cat || '').toLowerCase();
+            if (safeCat === 'gastro' || safeCat === 'chef_pro') {
+                img = `https://chef-aykut-backend.onrender.com/images/${id}.webp`;
+                console.log(`🔗 CONSTRUCTED_PROXY_IMAGE for recipe: ${r.t || r.name} -> ${img}`);
+            } else {
+                img = 'NO_IMAGE';
+            }
         }
     } else {
         img = _resolveImageUrl(img, cat);
@@ -956,7 +995,7 @@ app.get('/daily', async (req, res) => {
         const offset = hash % (count > limit ? count - limit : 1);
         const recipes = await collection.find({}).skip(offset).limit(limit).toArray();
             
-        res.json(recipes.map(r => _formatRecipe(r)));
+        res.json(await Promise.all(recipes.map(r => _formatRecipe(r))));
     } catch (err) {
         console.error(`❌ Server Error in /daily:`, err.message);
         res.status(500).json({ error: "Internal Server Error" });
@@ -1000,7 +1039,7 @@ app.get('/recipes/:id(*)', async (req, res) => {
             
             if (foundInChunk) {
                 console.log(`✅ Found recipe in chunk fallback: ${foundInChunk.t || foundInChunk.title || 'Untitled'}`);
-                return res.json(_formatRecipe(foundInChunk, foundInChunk));
+                return res.json(await _formatRecipe(foundInChunk, foundInChunk));
             }
             
             return res.status(404).json({ error: "Recipe not found in database or chunks", id: targetId });
@@ -1049,10 +1088,10 @@ app.get('/recipes/:id(*)', async (req, res) => {
             
         if (details) {
             console.log(`✨ Successfully hydrated from R2!`);
-            return res.json(_formatRecipe(recipe, details));
+            return res.json(await _formatRecipe(recipe, details));
         } else {
             console.warn(`⚠️ Hydration failed for ${recipe.i || recipe._id}, sending basic info`);
-            return res.json(_formatRecipe(recipe));
+            return res.json(await _formatRecipe(recipe));
         }
     } catch (err) {
         console.error(`🔥 Server Error:`, err.message);
