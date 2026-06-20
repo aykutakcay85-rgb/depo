@@ -276,6 +276,11 @@ function _resolveImageUrl(url, category = '') {
     
     const baseUrl = url.split('?v=')[0].trim();
     
+    // Already a broken proxy URL (UUID-based) — return empty so Flutter shows placeholder
+    if (baseUrl.includes('chef-aykut-backend.onrender.com/images/')) {
+        return '';
+    }
+    
     // Check if it belongs to old R2 buckets or Cloudflare Worker — rewrite to prod backend proxy
     if (baseUrl.includes('pub-088807d92556487e97d1ec1df970bc86')) {
         const path = baseUrl.replace(/^https?:\/\/pub-088807d92556487e97d1ec1df970bc86\.r2\.dev/, '');
@@ -299,7 +304,8 @@ function _resolveImageUrl(url, category = '') {
             }
             return `https://yemek-resimler.aykutakcay85.workers.dev/gastro_images/${baseUrl}?v=3`;
         } else {
-            return `${PROD_BASE_URL}/images/${baseUrl}?v=3`;
+            // Non-gastro relative paths: no proxy, return empty → Flutter shows placeholder
+            return '';
         }
     }
     
@@ -735,25 +741,8 @@ app.get('/recipes', async (req, res) => {
         // ── Gastro & Chef Pro: Doğrudan R2 chunk'tan serve et ──────────────────
         const cat = (category || '').toLowerCase();
 
-        if (cat === 'gastro' || cat === 'gastro_recipes') {
-            let gastroChunk = await getGastroRecipes();
-            if (query_text) {
-                const q = normalizeTitle(query_text);
-                gastroChunk = gastroChunk.filter(r => normalizeTitle(r.t || r.title || '').includes(q));
-            }
-            const paged = gastroChunk.slice(page * limit, (page + 1) * limit);
-            return res.json(paged.map(r => _formatRecipe(r, r)));
-        }
-        
-        if (cat === 'chef_pro' || cat === 'chef' || cat.includes('chef')) {
-            let chefChunk = await getChefRecipes();
-            if (query_text) {
-                const q = normalizeTitle(query_text);
-                chefChunk = chefChunk.filter(r => normalizeTitle(r.t || r.title || '').includes(q));
-            }
-            const paged = chefChunk.slice(page * limit, (page + 1) * limit);
-            return res.json(paged.map(r => _formatRecipe(r, r)));
-        }
+        // ⚠️ DEPRECATED: We now fetch all recipes from MongoDB directly to include new scraped recipes
+        // instead of using static JSON chunks.
         
         if (query_text && query_text.length > 1) {
             try {
@@ -830,8 +819,11 @@ app.get('/recipes', async (req, res) => {
 
         let cursor = collection.find(query);
         
-        // Always sort by _id to ensure stable pagination, otherwise scrolling will yield duplicates
-        cursor = cursor.sort({ _id: 1 });
+        // Only sort if we're not querying by a specific category, 
+        // to avoid the 32MB memory limit on Atlas Free Tier (which blocks allowDiskUse)
+        if (!category || category.toLowerCase() === 'all') {
+            cursor = cursor.sort({ r: -1, _id: 1 });
+        }
         
         const recipes = await cursor
             .skip(page * limit)
@@ -900,9 +892,14 @@ function _formatRecipe(r, details = null) {
     }
 
     if (!img) {
-        // Final Fallback: Construct Proxy Image URL based on ID
-        img = `https://chef-aykut-backend.onrender.com/images/${id}.webp`;
-        console.log(`🔗 CONSTRUCTED_PROXY_IMAGE for recipe: ${r.t || r.name} -> ${img}`);
+        // Final Fallback: Construct Proxy Image URL based on ID ONLY for gastro and chef_pro
+        const safeCat = (cat || '').toLowerCase();
+        if (safeCat === 'gastro' || safeCat === 'chef_pro') {
+            img = `https://chef-aykut-backend.onrender.com/images/${id}.webp`;
+            console.log(`🔗 CONSTRUCTED_PROXY_IMAGE for recipe: ${r.t || r.name} -> ${img}`);
+        } else {
+            img = 'NO_IMAGE';
+        }
     } else {
         img = _resolveImageUrl(img, cat);
         console.log(`✅ IMAGE_RESOLVED for recipe: ${r.t || r.name} -> ${img.substring(0, 45)}...`);
@@ -970,16 +967,11 @@ app.get('/recipes/:id(*)', async (req, res) => {
     try {
         const db = mongoClient.db("foodi");
         const collection = db.collection("chefaykut");
-        let targetId = req.params.id;
-        if (targetId.startsWith('https:/') && !targetId.startsWith('https://')) targetId = targetId.replace('https:/', 'https://');
-        if (targetId.startsWith('http:/') && !targetId.startsWith('http://')) targetId = targetId.replace('http:/', 'http://');
+        const targetId = req.params.id;
         
         console.log(`🔍 API Request for ID: ${targetId}`);
         
         let recipe = await collection.findOne({ _id: targetId });
-        if (!recipe) {
-            recipe = await collection.findOne({ id: targetId });
-        }
         if (!recipe) {
             recipe = await collection.findOne({ i: targetId });
         }
@@ -1018,7 +1010,7 @@ app.get('/recipes/:id(*)', async (req, res) => {
 
         // HYDRATION LOGIC: Merge data from external chunks (Chef/Gastro datasets)
         let details = null;
-        let effectiveH = recipe.h !== undefined ? recipe.h : recipe.chunk;
+        let effectiveH = recipe.h;
 
         // Force hydration for specific categories if 'h' is missing
         if (!effectiveH) {
@@ -1161,21 +1153,16 @@ app.get('/images/:filename(*)', async (req, res) => {
         }
 
         // 2. Extract recipe ID from filename (e.g. "uuid.webp" or URL slug)
-        let id = filename.replace('.webp', '');
-        if (id.startsWith('https:/') && !id.startsWith('https://')) id = id.replace('https:/', 'https://');
-        if (id.startsWith('http:/') && !id.startsWith('http://')) id = id.replace('http:/', 'http://');
+        const id = filename.replace('.webp', '');
         
         // 3. Find recipe in MongoDB Atlas to get chunk ID 'h' and title 't'
         const db = mongoClient.db("foodi");
         const collection = db.collection("chefaykut");
-        let recipe = await collection.findOne({ _id: id });
-        if (!recipe) recipe = await collection.findOne({ id: id });
-        if (!recipe) recipe = await collection.findOne({ i: id });
+        const recipe = await collection.findOne({ _id: id });
         
-        const chunk = recipe ? (recipe.h !== undefined ? recipe.h : (recipe.chunk !== undefined ? recipe.chunk : null)) : null;
-        if (recipe && chunk !== null) {
+        if (recipe && recipe.h !== undefined && recipe.h !== null) {
             // 4. Fetch full recipe from chunk to get the original image URL 'p'
-            const details = await getRecipeFromChunk(chunk, id, recipe.t);
+            const details = await getRecipeFromChunk(recipe.h, id, recipe.t);
             if (details && details.p && typeof details.p === 'string' && details.p.startsWith('http')) {
                 console.log(`✈️ Redirecting to external image: ${details.p}`);
                 return res.redirect(details.p);
