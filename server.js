@@ -1031,6 +1031,12 @@ app.get('/recipes/:id(*)', async (req, res) => {
         if (!recipe) {
             recipe = await collection.findOne({ i: targetId });
         }
+        if (!recipe) {
+            recipe = await collection.findOne({ id: targetId });
+        }
+        if (!recipe) {
+            recipe = await collection.findOne({ uid: targetId });
+        }
 
         if (!recipe && targetId.length === 24) {
             try {
@@ -1214,7 +1220,10 @@ app.get('/images/:filename(*)', async (req, res) => {
         // 3. Find recipe in MongoDB Atlas to get chunk ID 'h' and title 't'
         const db = mongoClient.db("foodi");
         const collection = db.collection("chefaykut");
-        const recipe = await collection.findOne({ _id: id });
+        let recipe = await collection.findOne({ _id: id });
+        if (!recipe) recipe = await collection.findOne({ i: id });
+        if (!recipe) recipe = await collection.findOne({ id: id });
+        if (!recipe) recipe = await collection.findOne({ uid: id });
         
         const chunkId = recipe ? (recipe.h !== undefined ? recipe.h : recipe.chunk) : null;
         if (recipe && chunkId !== undefined && chunkId !== null) {
