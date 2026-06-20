@@ -695,12 +695,24 @@ app.get('/home/previews', async (req, res) => {
 
         const results = {};
         
-        // Parallel fetch for 1 sample recipe per category
+        // Parallel fetch for 1 sample recipe per category (with chunk-based fallbacks for gastro and chef)
         const promises = categories.map(async (cat) => {
-            const query = getCategoryQuery(cat);
-            const recipe = await collection.findOne(query, { sort: { r: -1 } });
-            if (recipe) {
-                results[cat] = await _formatRecipe(recipe);
+            if (cat === 'gastro') {
+                const gastroRecipes = await getGastroRecipes();
+                if (gastroRecipes.length > 0) {
+                    results[cat] = await _formatRecipe(gastroRecipes[0]);
+                }
+            } else if (cat === 'chef' || cat === 'chef_pro') {
+                const chefRecipes = await getChefRecipes();
+                if (chefRecipes.length > 0) {
+                    results[cat] = await _formatRecipe(chefRecipes[0]);
+                }
+            } else {
+                const query = getCategoryQuery(cat);
+                const recipe = await collection.findOne(query, { sort: { r: -1 } });
+                if (recipe) {
+                    results[cat] = await _formatRecipe(recipe);
+                }
             }
         });
 
@@ -772,8 +784,13 @@ app.get('/recipes', async (req, res) => {
         // ── Gastro & Chef Pro: Doğrudan R2 chunk'tan serve et ──────────────────
         const cat = (category || '').toLowerCase();
 
-        // ⚠️ DEPRECATED: We now fetch all recipes from MongoDB directly to include new scraped recipes
-        // instead of using static JSON chunks.
+        if (cat === 'chef' || cat === 'chef_pro') {
+            const chefRecipes = await getChefRecipes();
+            const start = page * limit;
+            const end = start + limit;
+            const sliced = chefRecipes.slice(start, end);
+            return res.json(await Promise.all(sliced.map(r => _formatRecipe(r))));
+        }
         
         if (query_text && query_text.length > 1) {
             try {
