@@ -1049,7 +1049,7 @@ app.get('/recipes/:id(*)', async (req, res) => {
 
         // HYDRATION LOGIC: Merge data from external chunks (Chef/Gastro datasets)
         let details = null;
-        let effectiveH = recipe.h;
+        let effectiveH = recipe.h !== undefined ? recipe.h : recipe.chunk;
 
         // Force hydration for specific categories if 'h' is missing
         if (!effectiveH) {
@@ -1077,7 +1077,7 @@ app.get('/recipes/:id(*)', async (req, res) => {
         }
     
         // 🔄 FALLBACK: If primary chunk fails, try Chef and Gastro
-        if (!details && recipe.h !== 'chef' && recipe.h !== 'gastro') {
+        if (!details && effectiveH !== 'chef' && effectiveH !== 'gastro') {
             console.log(`🔍 Fallback: Trying 'chef' chunk...`);
             details = await getRecipeFromChunk('chef', recipe.i || recipe._id, recipe.t || recipe.title);
             if (!details) {
@@ -1199,9 +1199,10 @@ app.get('/images/:filename(*)', async (req, res) => {
         const collection = db.collection("chefaykut");
         const recipe = await collection.findOne({ _id: id });
         
-        if (recipe && recipe.h !== undefined && recipe.h !== null) {
+        const chunkId = recipe ? (recipe.h !== undefined ? recipe.h : recipe.chunk) : null;
+        if (recipe && chunkId !== undefined && chunkId !== null) {
             // 4. Fetch full recipe from chunk to get the original image URL 'p'
-            const details = await getRecipeFromChunk(recipe.h, id, recipe.t);
+            const details = await getRecipeFromChunk(chunkId, id, recipe.t);
             if (details && details.p && typeof details.p === 'string' && details.p.startsWith('http')) {
                 console.log(`✈️ Redirecting to external image: ${details.p}`);
                 return res.redirect(details.p);
