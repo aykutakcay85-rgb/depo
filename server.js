@@ -676,6 +676,17 @@ app.get('/recipes/counts', async (req, res) => {
         counts.forEach(c => {
             if (c._id) result[c._id] = c.count;
         });
+
+        // Add R2 chunk-based category counts
+        try {
+            const chefRecipes = await getChefRecipes();
+            const gastroRecipes = await getGastroRecipes();
+            result['chef'] = chefRecipes.length;
+            result['gastro'] = gastroRecipes.length;
+        } catch (e) {
+            console.warn("⚠️ R2 Category counts failed:", e.message);
+        }
+
         res.json(result);
     } catch (err) {
         console.error(`❌ Error in /recipes/counts:`, err.message);
@@ -789,6 +800,14 @@ app.get('/recipes', async (req, res) => {
             const start = page * limit;
             const end = start + limit;
             const sliced = chefRecipes.slice(start, end);
+            return res.json(await Promise.all(sliced.map(r => _formatRecipe(r))));
+        }
+
+        if (cat === 'gastro') {
+            const gastroRecipes = await getGastroRecipes();
+            const start = page * limit;
+            const end = start + limit;
+            const sliced = gastroRecipes.slice(start, end);
             return res.json(await Promise.all(sliced.map(r => _formatRecipe(r))));
         }
         
@@ -928,38 +947,36 @@ async function _formatRecipe(r, details = null) {
     };
 
     const id = r.i || r.id || r.uid || (r._id ? r._id.toString() : '');
+    const recipeName = r.t || r.title || r.name || '';
+    const safeCat = (cat || '').toLowerCase();
+    const chunk = r.h !== undefined ? r.h : (r.chunk !== undefined ? r.chunk : null);
 
     let img = '';
-    if (isValid(r2Img)) {
-        img = r2Img; // R2 details (hydration) takes priority for Gastro/Chef
-    } else if (isValid(dbImg)) {
-        img = dbImg;
-    }
-
-    if (!img) {
-        // Try Cloudflare KV (scraped Yandex images) before giving up
-        const recipeName = r.t || r.title || r.name || '';
-        const kvImg = await getImageFromKV(recipeName);
-        if (kvImg) {
-            img = kvImg;
-            console.log(`🗝️  KV_IMAGE for '${recipeName}': ${img.substring(0,60)}`);
-        } else {
-            // Final Fallback: Construct Proxy Image URL based on ID ONLY for gastro and chef_pro
-            const safeCat = (cat || '').toLowerCase();
-            if (safeCat === 'gastro' || safeCat === 'chef_pro') {
-                img = `https://chef-aykut-backend.onrender.com/images/${id}.webp`;
-                console.log(`🔗 CONSTRUCTED_PROXY_IMAGE for recipe: ${r.t || r.name} -> ${img}`);
+    if (safeCat === 'gastro' || safeCat === 'chef_pro' || safeCat.includes('gastro')) {
+        let rawGastroImg = r2Img || dbImg;
+        if (rawGastroImg && typeof rawGastroImg === 'string' && rawGastroImg.startsWith('http')) {
+            if (!rawGastroImg.includes('yemek-resimler.aykutakcay85.workers.dev')) {
+                img = rawGastroImg;
             } else {
-                img = 'NO_IMAGE';
+                let filename = rawGastroImg.split('?')[0].split('/').pop();
+                if (!filename || filename === 'null') {
+                    filename = `${id}.webp`;
+                }
+                img = `https://yemek-resimler.aykutakcay85.workers.dev/gastro_images/${filename}`;
             }
+        } else {
+            img = `https://yemek-resimler.aykutakcay85.workers.dev/gastro_images/${id}.webp`;
         }
+    } else if (chunk !== null && chunk !== undefined && chunk !== '') {
+        img = `https://yemek-resimler.aykutakcay85.workers.dev/images/${chunk}/${id}.webp`;
     } else {
-        img = _resolveImageUrl(img, cat);
-        console.log(`✅ IMAGE_RESOLVED for recipe: ${r.t || r.name} -> ${img.substring(0, 45)}...`);
+        if (recipeName) {
+            img = `https://yemek-resimler.aykutakcay85.workers.dev/image/${encodeURIComponent(recipeName)}`;
+        } else {
+            img = 'NO_IMAGE';
+        }
     }
 
-    const chunk = r.h !== undefined ? r.h : (r.chunk !== undefined ? r.chunk : null);
-    
     // If r.p is a URL, don't overwrite it with chunk ID here; use a separate part variable
     const part = (typeof r.p === 'number') ? r.p : chunk;
 
