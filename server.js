@@ -1001,6 +1001,8 @@ async function _formatRecipe(r, details = null) {
         l_time: r.l || r.prep_time || r.total_time || '',
         // Legacy support
         id: id,
+        url: r.url || r.uid || id,
+        uid: r.uid || r.url || id,
         title: r.t || r.title || r.name || 'Untitled Recipe',
         category: r.c || r.category || r.main_category || 'General'
     };
@@ -1041,22 +1043,19 @@ app.get('/recipes/:id(*)', async (req, res) => {
         
         console.log(`🔍 API Request for ID: ${targetId}`);
         
-        let recipe = await collection.findOne({ _id: targetId });
-        if (!recipe) {
-            recipe = await collection.findOne({ i: targetId });
-        }
-        if (!recipe) {
-            recipe = await collection.findOne({ id: targetId });
-        }
-        if (!recipe) {
-            recipe = await collection.findOne({ uid: targetId });
-        }
-
-        if (!recipe && targetId.length === 24) {
+        const queryList = [
+            { _id: targetId },
+            { i: targetId },
+            { id: targetId },
+            { uid: targetId }
+        ];
+        if (targetId.length === 24) {
             try {
-                recipe = await collection.findOne({ _id: new ObjectId(targetId) });
+                queryList.push({ _id: new ObjectId(targetId) });
             } catch (e) {}
         }
+        
+        let recipe = await collection.findOne({ $or: queryList });
 
         if (!recipe) {
             console.log(`❌ Recipe not found in MongoDB: ${targetId}. Trying memory chunks fallback...`);
