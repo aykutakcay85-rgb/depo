@@ -962,10 +962,10 @@ async function _formatRecipe(r, details = null) {
                 if (!filename || filename === 'null') {
                     filename = `${id}.webp`;
                 }
-                img = `https://yemek-resimler.aykutakcay85.workers.dev/gastro_images/${filename}`;
+                img = `https://yemek-resimler.aykutakcay85.workers.dev/${filename}`;
             }
         } else {
-            img = `https://yemek-resimler.aykutakcay85.workers.dev/gastro_images/${id}.webp`;
+            img = `https://yemek-resimler.aykutakcay85.workers.dev/${id}.webp`;
         }
     } else if (chunk !== null && chunk !== undefined && chunk !== '') {
         img = `https://yemek-resimler.aykutakcay85.workers.dev/images/${chunk}/${id}.webp`;
