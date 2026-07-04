@@ -331,9 +331,9 @@ function _resolveImageUrl(url, category = '') {
         if (category && category.toLowerCase().includes('gastro')) {
             // GASTRO_CDN_BASE env ile Cloudflare'den direkt (proxy yok, çok hızlı)
             if (GASTRO_CDN_BASE) {
-                return `${GASTRO_CDN_BASE}/gastro_images/${baseUrl}`;
+                return `${GASTRO_CDN_BASE}/${baseUrl}`;
             }
-            return `https://yemek-resimler.aykutakcay85.workers.dev/gastro_images/${baseUrl}?v=3`;
+            return `https://yemek-resimler.aykutakcay85.workers.dev/${baseUrl}?v=3`;
         } else {
             // Non-gastro relative paths: no proxy, return empty → Flutter shows placeholder
             return '';
@@ -1177,10 +1177,10 @@ app.get('/gastro_images/:filename', async (req, res) => {
         
         // If a direct Cloudflare CDN base is configured, redirect there instantly (no proxy overhead)
         if (GASTRO_CDN_BASE) {
-            return res.redirect(302, `${GASTRO_CDN_BASE}/gastro_images/${filename}`);
+            return res.redirect(302, `${GASTRO_CDN_BASE}/${filename}`);
         }
 
-        const key = `gastro_images/${filename}`;
+        const key = filename;
         
         // Get a pre-signed or public URL from R2 and redirect — much faster than proxying binary
         // Try to generate a redirect URL using the R2 public endpoint
